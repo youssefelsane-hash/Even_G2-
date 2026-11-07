@@ -1,0 +1,83 @@
+/* Phone-side panel, following the Even app tokens from the official design guidelines. */
+:root {
+  --color-text: #232323;
+  --color-text-dim: #6b6b6b;
+  --color-bg: #ffffff;
+  --color-surface: #eeeeee;
+  --color-input-bg: rgba(35, 35, 35, 0.08);
+  --color-accent: #fef991;
+  --color-bad: #c0392b;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-text: #ffffff;
+    --color-text-dim: #9a9a9a;
+    --color-bg: #111111;
+    --color-surface: #1a1a1a;
+    --color-input-bg: rgba(255, 255, 255, 0.08);
+    --color-bad: #ff6b5b;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font: 400 16px/1.45 system-ui, -apple-system, sans-serif;
+}
+main { padding: 16px; max-width: 640px; margin: 0 auto; }
+h1 { font-size: 20px; margin: 0 0 8px; }
+h2 { font-size: 14px; margin: 12px 0 6px; color: var(--color-text-dim); }
+.state {
+  display: inline-block;
+  margin: 0 0 8px;
+  padding: 4px 12px;
+  border-radius: 6px;
+  background: var(--color-surface);
+  font-weight: 600;
+}
+.state[data-state='VISIBLE'], .state[data-state='RESULT_READY'] { background: var(--color-accent); color: #232323; }
+.state[data-state='ERROR'] { background: var(--color-bad); color: #ffffff; }
+.meta { color: var(--color-text-dim); font-size: 13px; margin: 6px 0; }
+.warn { color: var(--color-bad); font-size: 14px; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.4 ui-monospace, Menlo, monospace; }
+details { margin: 10px 0; padding: 10px 12px; background: var(--color-surface); border-radius: 6px; }
+details details { background: var(--color-input-bg); }
+summary { font-weight: 600; cursor: pointer; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0; }
+button {
+  min-height: 40px;
+  padding: 6px 12px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--color-input-bg);
+  color: inherit;
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+label { display: block; margin: 8px 0; font-size: 14px; }
+label input[type='number'] {
+  display: block;
+  width: 100%;
+  min-height: 36px;
+  margin-top: 2px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--color-input-bg);
+  color: inherit;
+  font: inherit;
+}
+label.check { display: flex; align-items: center; gap: 8px; }
+textarea {
+  width: 100%;
+  border: 0;
+  border-radius: 6px;
+  padding: 8px;
+  background: var(--color-input-bg);
+  color: inherit;
+  font: 12px/1.4 ui-monospace, Menlo, monospace;
+}
+[hidden] { display: none !important; }

@@ -1,0 +1,27 @@
+# Dependencies and build output
+node_modules/
+dist/
+dist-ssr/
+*.ehpk
+
+# Secrets and local settings: never commit these
+.env
+.env.*
+!.env.example
+*.local
+*.pem
+*.key
+
+# Logs and captures
+*.log
+imu-log-*.csv
+imu-log-*.json
+
+# Editors and OS
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Camera firmware secrets
+config.h

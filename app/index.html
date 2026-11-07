@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>G2 Assistant</title>
+  </head>
+  <body>
+    <main>
+      <h1>G2 Assistant</h1>
+      <p class="state" id="state" data-state="HIDDEN">HIDDEN</p>
+      <pre id="detail" class="meta"></pre>
+      <p id="wearHelp" class="warn" hidden>
+        The glasses report as not worn. If they are on your head, the wear value may not be reaching the app:
+        turn off "Trust the wear sensor" in Settings. Automatic hiding on removal stops while it is off.
+      </p>
+      <p class="meta">This page never shows answer text, so it cannot leak what Hidden mode hides.</p>
+
+      <details open>
+        <summary>Simulator tools</summary>
+        <p class="meta">The simulator sends no IMU or wear events. These buttons inject them through the same code paths.</p>
+        <h2>Wear and connection</h2>
+        <div class="row">
+          <button id="wearOn" type="button">Worn</button>
+          <button id="wearOff" type="button">Removed</button>
+          <button id="wearUnknown" type="button">Unknown</button>
+          <button id="connOff" type="button">Disconnect</button>
+          <button id="connOn" type="button">Reconnect</button>
+        </div>
+        <h2>Motion</h2>
+        <div class="row" id="motions"></div>
+        <p class="meta" id="motionStatus">Idle</p>
+        <h2>Fake AI</h2>
+        <div class="row">
+          <button id="aiStart" type="button">Photo sent</button>
+          <button id="aiResult" type="button">Answer arrives</button>
+          <button id="aiError" type="button">AI error</button>
+          <button id="touchPress" type="button">Touch press</button>
+        </div>
+      </details>
+
+      <details>
+        <summary>Settings</summary>
+        <form id="settings" autocomplete="off">
+          <div id="settingsEnd"></div>
+          <label class="check"><input id="tiltEnabled" type="checkbox" /> Tilt to scroll</label>
+          <label class="check"><input id="trustWear" type="checkbox" /> Trust the wear sensor</label>
+          <button type="submit">Save</button>
+          <span id="settingsSaved" class="meta"></span>
+        </form>
+        <details>
+          <summary>Advanced JSON</summary>
+          <textarea id="advanced" rows="12" spellcheck="false"></textarea>
+          <button id="saveAdvanced" type="button">Save JSON</button>
+        </details>
+      </details>
+
+      <details>
+        <summary>Calibration</summary>
+        <p id="calText"></p>
+        <pre id="calProposal" class="meta"></pre>
+        <div class="row">
+          <button id="calStart" type="button">Start</button>
+          <button id="calNext" type="button" hidden>Next</button>
+          <button id="calAccept" type="button" hidden>Accept</button>
+          <button id="calCancel" type="button" hidden>Cancel</button>
+        </div>
+      </details>
+
+      <details>
+        <summary>Raw IMU logger (Phase 0)</summary>
+        <p class="meta" id="logStatus"></p>
+        <div class="row">
+          <button id="logStart" type="button">Start</button>
+          <button id="logStop" type="button">Stop</button>
+          <button id="imuRestart" type="button">Restart IMU</button>
+        </div>
+        <h2>Marks</h2>
+        <div class="row">
+          <button type="button" data-mark="still">Still</button>
+          <button type="button" data-mark="tilt up">Tilt up</button>
+          <button type="button" data-mark="tilt down">Tilt down</button>
+          <button type="button" data-mark="turn left">Turn left</button>
+          <button type="button" data-mark="turn right">Turn right</button>
+          <button type="button" data-mark="shake">Shake</button>
+          <button type="button" data-mark="walking">Walking</button>
+          <button type="button" data-mark="phone locked">Phone locked</button>
+          <button type="button" data-mark="phone unlocked">Phone unlocked</button>
+          <button type="button" data-mark="glasses off">Glasses off</button>
+          <button type="button" data-mark="glasses on">Glasses on</button>
+        </div>
+        <h2>Export</h2>
+        <div class="row">
+          <button id="logCsv" type="button">CSV</button>
+          <button id="logJson" type="button">JSON</button>
+          <button id="logPrev" type="button">Log from earlier session</button>
+        </div>
+        <pre id="logSummary" class="meta"></pre>
+        <textarea id="logOut" rows="6" spellcheck="false" placeholder="Export appears here, in case the host blocks file downloads."></textarea>
+      </details>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
