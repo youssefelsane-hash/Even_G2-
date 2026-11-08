@@ -118,7 +118,9 @@ async function input(action) {
 const STEPS = [
   ['start', 'dark'], ['visible-answer', 'lit'], ['visible-scrolled', 'lit'], ['hidden', 'dark'],
   ['hidden-with-result', 'dark'], ['visible-new-result', 'lit'], ['visible-position-before-hide', 'lit'],
-  ['hidden-again', 'dark'], ['visible-position-restored', 'lit'], ['removed', 'dark'], ['rewear-stays-hidden', 'dark'],
+  ['hidden-again', 'dark'], ['visible-position-restored', 'lit'],
+  ['camera-received-visible', 'lit'], ['camera-retake-hidden', 'dark'], ['camera-retake-visible', 'lit'], ['hidden-before-removal', 'dark'],
+  ['removed', 'dark'], ['rewear-stays-hidden', 'dark'],
 ];
 
 const binary = require.resolve(`@evenrealities/sim-${process.platform}-${process.arch}/bin/evenhub-simulator`);
@@ -157,6 +159,8 @@ try {
   const same = (a, b) => a.image.px.equals(b.image.px);
   check('scrolling changed the screen', !same(shots['visible-answer'], shots['visible-scrolled']));
   check('after hide and show the screen is pixel-identical', same(shots['visible-position-before-hide'], shots['visible-position-restored']));
+  check('camera status changed the header line', !same(shots['visible-position-restored'], shots['camera-received-visible']));
+  check('a retake that arrived while hidden shows after the restore', !same(shots['camera-received-visible'], shots['camera-retake-visible']));
 
   await waitFor(/^STEP done/);
   await sleep(1800); // past the wear settle time

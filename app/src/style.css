@@ -58,7 +58,7 @@ button {
   cursor: pointer;
 }
 label { display: block; margin: 8px 0; font-size: 14px; }
-label input[type='number'] {
+label input[type='number'], label input[type='url'], label input[type='password'], label select {
   display: block;
   width: 100%;
   min-height: 36px;

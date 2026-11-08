@@ -51,6 +51,19 @@ export async function runAutopilot({ assistant, now }: PanelHost): Promise<void>
   await motion('shake');
   await step('visible-position-restored');
 
+  // Camera status through the same entry point as backend events.
+  await assistant.handleJobEvent({ jobId: 'sim-job-1', seq: 1, status: 'received', photos: 3, pages: 1 });
+  await step('camera-received-visible');
+  await motion('shake');
+  await assistant.handleJobEvent({ jobId: 'sim-job-1', seq: 2, status: 'processing', photos: 3, pages: 1 });
+  await assistant.handleJobEvent({ jobId: 'sim-job-1', seq: 3, status: 'retake', photos: 3, pages: 1, result: { short: '', detail: [], label: 'RETAKE', caveats: [], pages: 1, usedFrames: 0, retakeReason: 'too dark' } });
+  await step('camera-retake-hidden');
+  await motion('shake');
+  await step('camera-retake-visible');
+  assistant.handleTouch('press');
+  await motion('shake');
+  await step('hidden-before-removal');
+
   assistant.handleWear(false);
   await step('removed');
 

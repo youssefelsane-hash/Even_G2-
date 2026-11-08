@@ -10,7 +10,10 @@
     "typecheck": "tsc",
     "test": "node --test 'test/**/*.test.ts'",
     "report": "node tools/fp-report.ts",
-    "sim:e2e": "node tools/sim-e2e.mjs"
+    "sim:e2e": "node tools/sim-e2e.mjs",
+    "mutate": "node tools/mutation-check.ts",
+    "replay": "node tools/replay.ts",
+    "traces": "node tools/make-traces.ts"
   },
   "devDependencies": {
     "@evenrealities/evenhub-cli": "^0.2.0",

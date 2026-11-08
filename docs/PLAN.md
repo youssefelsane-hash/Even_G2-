@@ -1,6 +1,8 @@
 # Project plan
 
-Date: 2026-11-07. Current position: simulator prototype finished, nothing tested on hardware, nothing committed.
+Date: 2026-11-07, updated 2026-11-08. Current position: glasses app, backend and Linux camera client are built and
+pass their tests and a full-system test on one computer (mock AI, fake camera, simulator). ESP32 firmware written,
+never compiled. Nothing tested on hardware, nothing committed.
 
 The rule of this plan: **measure before building.** The two facts that can end the project as specified are
 whether x/y/z carry usable head motion, and whether IMU samples keep arriving with the Android phone locked. No
@@ -21,6 +23,9 @@ numbers are in [SPEC-V0.3.md](SPEC-V0.3.md) section 14.
 | 5 | Only if needed: BLE companion | 2 weeks | None planned |
 
 Do not start a phase until the gate before it says go. Do not buy camera parts or set up a server before G0.
+One exception for the owner to decide (D8): the camera tests CH-1 to CH-3 do not depend on the glasses, so a cheap
+camera (the ESP32-CAM rig, about 720 EGP, or the Duo2 kit) could be bought and focus-tested in parallel with
+Phase 0. The software for Phases 2 and 3 is already written, so those phases are now mostly testing.
 
 ## Phase 0: hardware experiments
 
@@ -85,10 +90,12 @@ take the menu as the normal hide. Either one is a spec change for the owner.
 
 Tasks:
 
-1. Bring in the Study Lens backend with the changes below.
-2. Replace the answer schema, prompt and label logic.
-3. Add the plugin client, `network` permission, whitelist and runtime token entry.
-4. Test with `tools/fake-camera.mjs`, then the phone camera through `captureImageFromCamera()`. The second gives a real
+1. Done in software: the Study Lens backend is ported into `backend/` with its known faults fixed (no ntfy, images
+   deleted at job end with a 1 h hard limit, idempotency key reserved before writing, no results drawn at cold
+   start).
+2. Done in software: multi-frame fusion schema, prompt and label logic (mock AI only).
+3. Done in software: plugin client, `network` permission, whitelist placeholder, runtime token entry.
+4. Still to do on hardware: test with `tools/fake-camera.mjs`, then the phone camera through `captureImageFromCamera()`. The second gives a real
    AI path before any camera exists. VERIFIED DTS:1390.
 5. Deploy on a small EU server. Check that no secrets are in the repo.
 
@@ -104,17 +111,22 @@ network in the background (`in-flight requests stall`, VERIFIED D/reference/faq)
 
 Tasks:
 
-1. Buy parts. Check which sensor arrives. VERIFIED [S2]: boards may ship with OV5640 or OV3660.
-2. Change the firmware: external LED before capture, deep sleep window, new LED patterns, no microphone.
-3. Flash and test on the bench. Nothing in this firmware has ever been flashed. VERIFIED [S1].
-4. Design the enclosure: must look like a camera, LED beside the lens, vents.
+1. Choose and buy a board (D8, [CAMERA-HARDWARE-EGYPT.md](CAMERA-HARDWARE-EGYPT.md)). For the XIAO, check which
+   sensor arrives: Seeed's wiki says OV5640 or OV3660, retailers say OV2640 or OV3660.
+2. Linux board: flash the vendor image (FriendlyCore 4.14 for the Duo2, Raspberry Pi OS for the Zero), run
+   `camera/linux/setup.sh`, wire button, LED and motor per `camera/linux/WIRING.md`. ESP32: compile and flash
+   `camera/esp32` for the first time.
+3. Run the camera bench tests HT-19 to HT-24 (focus first), then calibrate the scoring thresholds (CAPTURE-STRATEGY.md
+   experiments CS-1 to CS-9).
+4. Design the enclosure: must look like a camera, LED beside the lens, vents (the Duo2 runs warm).
 5. Run HT-14, HT-15, HT-16.
 
 ### Gate G3
 
 **Go** if the hotspot works locked, 18 of 20 pages are legible, and the LED passes HT-16. HT-16 cannot be waived.
 
-**No-go** routes: hotspot fails, go to Phase 5. Image quality fails, try the other sensor, or a larger device. LED fails,
+**No-go** routes: hotspot fails, go to Phase 5. Image quality fails because of focus, refocus the lens or move to a
+board with autofocus (Camera Module 3, or an OV5640 with a focus motor); more frames will not fix focus. LED fails,
 fix before any further use.
 
 ## Phase 4: integration
@@ -137,6 +149,10 @@ endpoint with the same key. It does not help with the lens, the IMU or the locke
 
 Study Lens has never run on real hardware. VERIFIED [S1]. Reusing it saves writing code, not testing it. Copy from it.
 Do not modify the original.
+
+**Status 2026-11-08:** the backend rows below are done in `backend/` (the provider boundary is now called
+`FusionProvider`). The camera firmware was rewritten as `camera/esp32` (burst only) and a new Linux client
+`camera/linux`, rather than adapted from `firmware/study_cam/`. The table is kept as the record of what was changed.
 
 | Part | Action | Phase | Notes |
 | --- | --- | --- | --- |
@@ -208,4 +224,6 @@ Limitations that are permanent for V1, by design or platform:
 | Now | Approve logger additions L1 to L4 |
 | Now | Run `evenhub login` yourself. Decide when to commit: nothing in this repo is committed yet |
 | At G0 | Q1 and Q2, using the measured results |
-| Phase 1 | D3, D4, D5, D7 |
+| Phase 1 | D3, D5, D7 (D4 resolved: queue of 20 built) |
+| Before buying a camera | D8 (board), and whether to buy it before G0 |
+| Phase 2-3 | D9 (`CHECK FAILED` label), D10 (capture API changes) |

@@ -160,3 +160,12 @@ test('every state and event obeys the spec rules', () => {
     }
   }
 });
+
+test('undo hide reveals only from Hidden while worn, never with wear unknown or removed', () => {
+  const undo = { type: 'UNDO_HIDE' } as const;
+  const base = bootState();
+  assert.equal(reduce({ ...base, wear: 'worn' }, undo).state.mode, 'VISIBLE');
+  assert.equal(reduce({ ...base, wear: 'unknown' }, undo).accepted, false);
+  assert.equal(reduce({ ...base, mode: 'REMOVED', wear: 'removed' }, undo).accepted, false);
+  assert.equal(reduce({ ...base, mode: 'VISIBLE', wear: 'worn' }, undo).accepted, false);
+});

@@ -36,6 +36,13 @@ Fill this in as you go. Keep it outside the public repo if it holds anything per
 | HT-16 LED visibility | | | | |
 | HT-17 Hidden end to end | | | | |
 | HT-18 Acceptance run | | | | |
+| HT-19 Camera focus at reading distance | | | | |
+| HT-20 Camera modes and full-size stills | | | | |
+| HT-21 Burst and scoring speed | | | | |
+| HT-22 Button, LED, motor and press types | | | | |
+| HT-23 Hard conditions and retake reasons | | | | |
+| HT-24 Camera power and boot | | | | |
+| HT-25 Clip mode leaves nothing behind | | | | |
 
 ## Before you start
 
@@ -589,3 +596,150 @@ Run all 12 acceptance tests in SPEC section 13, on a Beta build, in a single sit
 with the logs.
 
 **Pass:** all 12, or a written owner decision for any that is accepted as a limit. This is gate G4.
+
+## Camera bench tests (before HT-14)
+
+These test the camera alone, before it is joined to the glasses. Run them on the bench, in this order: a board that
+fails HT-19 is not worth wiring. They cover CH-1 to CH-8 in [CAMERA-HARDWARE-EGYPT.md](CAMERA-HARDWARE-EGYPT.md) and
+CS-1 to CS-9 in [CAPTURE-STRATEGY.md](CAPTURE-STRATEGY.md). Nothing here has been run yet.
+
+Use one printed test sheet throughout: 8, 10, 12 and 16-point text, a line of maths, a small table, on matt paper,
+plus the same sheet in a glossy plastic sleeve for glare.
+
+Which tests apply to which board:
+
+| Test | NanoPi Duo2 + OV5640 | Pi Zero 2 W + Camera Module 3 | XIAO ESP32-S3 Sense | ESP32-CAM test rig |
+| --- | --- | --- | --- | --- |
+| HT-19 Focus | **First, on day one** (lens may be fixed) | Check autofocus at 20-30 cm | Only if the OV5640 arrived; OV2640 / OV3660 are fixed focus | Yes (fixed focus, lens may turn) |
+| HT-20 Modes | `v4l2-ctl` on FriendlyCore 4.14 | `rpicam-hello --list-cameras` | Sensor ID on the serial log | Sensor ID on the serial log |
+| HT-21 Speed | Yes (software JPEG on the H3) | Yes | Yes | Yes |
+| HT-22 Button, LED, motor | Yes | Yes | Yes (firmware compiled for the first time) | Needs a board config change first |
+| HT-23 Hard conditions | Yes | Yes | Yes | Yes |
+| HT-24 Power and boot | Yes (stays on) | Yes (stays on) | Deep sleep and wake | Yes |
+| HT-25 Clip leaves nothing | Yes | Yes | Not applicable (no clip) | Not applicable |
+
+### HT-19. Focus at reading distance
+
+**Answers:** CH-1, CS-1. Decides whether the board is usable for pages.
+
+Steps:
+
+1. Fix the camera on a table. Put the test sheet at 20, 30, 40 and 60 cm.
+2. Take one still at each distance at the largest size the board gives (HT-20). Duo2:
+   `v4l2-ctl -d /dev/video0 -l` first, and note any focus control. Pi: `rpicam-still --autofocus-on-capture -o a.jpg`.
+3. Look at the 10-point line at 100 % zoom on a computer.
+4. Duo2 and ESP32-CAM only: if 30 cm is soft, check whether the lens turns (gently, with the board unpowered). If it
+   does, set it for 30 cm, repeat step 2, then fix it with a drop of nail varnish.
+
+**Pass:** 10-point text readable by eye at 30 cm, and at 25 or 40 cm as well.
+
+If it fails: do not buy anything else for this board. More frames do not fix focus. Move to a board with autofocus
+(D8).
+
+### HT-20. Camera modes and full-size stills
+
+**Answers:** CH-2, CS-5.
+
+Steps:
+
+1. Duo2: `v4l2-ctl -d /dev/video0 --list-formats-ext`. Try a 2592 x 1944 and a 2048 x 1536 capture with ffmpeg
+   (the command lines are in `camera/linux/evencam/sources.py`) and note the real frame rate. Check whether 1920 x
+   1080 crops the view or scales the whole sensor (same scene, compare the edges).
+2. Pi: `rpicam-hello --list-cameras` and a 2 s `rpicam-vid` at 2304 x 1296.
+3. ESP32: read the sensor ID line on the serial monitor (`Camera sensor PID 0x...`) and note the frame size used.
+4. Set `resolution` on the phone panel to the largest size that gave clean frames at 5 fps or more.
+
+**Pass:** clean frames at 2048 x 1536 or larger, and a clip mode at 1280 x 720 or larger at 15 fps or more.
+
+If it fails: on the Duo2, 1280 x 720 only means small print is poor (CAMERA-HARDWARE-EGYPT.md section 4). Use
+burst at 720p for objects and large print only, or change board.
+
+### HT-21. Burst and scoring speed
+
+**Answers:** CH-3, CS-6.
+
+Steps: follow the client log with `journalctl -u even-g2-camera -f -o short-precise` and the backend log, and press
+10 times while filming the camera. The client logs one `press <key> mode=... kept=n of m` line when capture and
+scoring are done, and the backend logs the upload. From the video and the two time stamps, note press to LED, press to
+the `press` line, and press to the upload. The client logs no finer timings yet (ASSUMPTION that these are enough;
+add timing to `controller.py` if not).
+
+**Pass:** press to upload under 6 s on Wi-Fi.
+
+If it fails: lower `resolution` or `burstFrames` from the phone panel.
+
+### HT-22. Button, LED, motor and press types
+
+**Answers:** the capture-control rules in SPEC section 9.
+
+Steps:
+
+1. 20 single presses, 20 long presses (hold 1 s), 20 double presses, at your natural speed. Check the backend log:
+   single gives `burst`, long gives `clip` (ESP32: `burst` with 8 frames), double gives an appended page.
+2. 10 very short taps and 10 presses with a wobbly finger. No double capture from one press.
+3. Film the camera with a phone at 120 fps or more during 10 presses. Count frames between LED on and the first
+   capture (the sensor may give a small flash of its own, or use the uploaded frame time). The LED must be on at
+   least 500 ms before capture.
+4. Check every LED pattern and the motor (if fitted): captured, uploaded, retake, error, queued offline.
+
+**Pass:** 58 of 60 presses classified right, no doubles, LED on at least 500 ms before every capture, every pattern
+recognisable without looking at the phone.
+
+If it fails: adjust the long-press and double-press timing in `camera/linux/evencam/button.py` (or the firmware), or
+change the button.
+
+### HT-23. Hard conditions and retake reasons
+
+**Answers:** CS-3, CS-4, CS-7, CS-9, CH-6.
+
+Steps, 20 presses each with the test sheet at about 30 cm:
+
+1. Normal desk light, hand-held.
+2. One dim lamp (about 50-100 lux). Then almost dark.
+3. Glossy sleeve under a ceiling light, tilting slightly.
+4. Walking slowly, or on a moving bus.
+5. Page partly out of frame.
+
+For each press, note: frames sent, label, retake reason, and whether the answer was right. Keep the numbers, not the
+photos (the backend deletes them).
+
+**Pass:** in 1, 18 of 20 answered and right. In 2 to 5, every press is either answered right or gets a retake with
+the matching reason (too dark, glare, blurry, page cut off). No confident wrong answer.
+
+If it fails: tune the thresholds in `camera/linux/evencam/scoring.py` and `backend/src/quality.ts` on these numbers
+(CAPTURE-STRATEGY.md section 9), or add a fill light (CH-6).
+
+### HT-24. Camera power and boot
+
+**Answers:** CH-4, CH-5, C5.
+
+Steps:
+
+1. Linux boards: time from switch-on to the "boot" LED pattern and to the first accepted press, 5 times.
+2. Measure current from the cell with a USB or inline meter: idle on Wi-Fi, during a burst, during upload.
+3. With the cell at about 3.6 V, take 10 presses and watch the 5 V rail (multimeter). It must stay above 4.8 V.
+4. Run a 2-hour session with one press every 5 minutes. Note the battery left.
+5. ESP32: time from press to 202 from deep sleep, 10 times.
+
+**Pass:** the board survives a 2-hour session on the planned cell with no reset; 5 V rail never below 4.8 V.
+
+If it fails: a bigger cell or a stronger power module. The MT3608 is known not to work from a LiPo (its listing gives
+under 100 mA below 4.0 V input).
+
+### HT-25. Clip mode leaves nothing behind
+
+**Answers:** "video never leaves the device" and "nothing written to the SD card".
+
+Steps:
+
+1. Do 10 long presses. After each, run `ls -la /run/even-g2-camera/work` and
+   `sudo find / -xdev -newer /tmp/marker -type f 2>/dev/null | grep -v -e ^/proc -e ^/sys` (create `/tmp/marker`
+   with `touch` first).
+2. Pull the power during a long press, boot again, and repeat the `ls`.
+3. Check that no audio device is open during a press: `sudo fuser -v /dev/snd/*`.
+
+**Pass:** no clip folder or video file anywhere after any press or after the power cut; no file written to the SD
+card except logs; no audio device opened.
+
+If it fails: release blocker for clip mode. Set `longPressMode` to `burst` on the phone panel until it is fixed.
+

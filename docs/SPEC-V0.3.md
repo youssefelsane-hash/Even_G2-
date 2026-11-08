@@ -1,6 +1,7 @@
 # Even G2 Personal Assistant: specification V0.3
 
-Date: 2026-11-07. Status: **draft, waiting for owner approval.** Nothing has been tested on real glasses.
+Date: 2026-11-07, updated 2026-11-08 (camera control, capture modes, answer queue, built status). Status:
+**draft, waiting for owner approval.** Nothing has been tested on real glasses, a real phone or a real camera.
 
 The baseline is the owner's original [SPEC-V0.2.md](SPEC-V0.2.md). The table below was first written from a
 summary, then compared with the original, which added the AI input scope in section 10 and corrected row 14 and D4.
@@ -18,9 +19,11 @@ Requirements are decisions, so they carry no label. Facts they depend on are lab
 Source keys (DTS, RM, SK/, D/, SUP/, GH#, CN/, SL) are defined in [SDK-APIS.md](SDK-APIS.md). Camera sources
 [S1] and up are defined in [CAMERA-AND-BACKEND.md](CAMERA-AND-BACKEND.md).
 
-Where this spec differs from those studies, this spec wins. Five known cases: no phone alert in V1 (the camera study
+Where this spec differs from those studies, this spec wins. Known cases: no phone alert in V1 (the camera study
 keeps a fixed-text alert), line offset instead of pages, no re-basing of neutral after a long hold, the press
-pattern kept alongside the menu until HT-9, and one stored answer on the phone (the camera study says 20).
+pattern kept alongside the menu until HT-9, the ESP32-only camera choice (replaced by section 9), and single photos
+(replaced by burst, clip and multi-page capture in section 9). The HTTP contract is [API.md](API.md), and the
+capture details are in [CAPTURE-STRATEGY.md](CAPTURE-STRATEGY.md).
 
 ## Changes from V0.2 and why
 
@@ -39,10 +42,10 @@ pattern kept alongside the menu until HT-9, and one stored answer on the phone (
 | 11 | Wear is worn or removed | Wear is worn, removed or unknown. A missing value reads as removed | SDK 0.0.16 turns a missing `isWearing` into `false`, in the constructor and in `DeviceStatus.fromJson`. VERIFIED by running the SDK, `app/test/hostEvents.test.ts` |
 | 12 | Reconnect must not reveal | Losing the connection also hides content, and wear becomes unknown | Safe default. ASSUMPTION that this is the owner's wish (D3) |
 | 13 | Six flat states | Same six names, built from `mode` plus `job` | A camera job runs whatever the lens shows. Hidden and Removed always win |
-| 14 | Shake restores the exact screen | True unless a new answer arrived while hidden. Then the new answer shows from its first line | V0.2 section 7 says to queue answers while hidden, but the prototype keeps only the newest one. Owner to decide (D4) |
+| 14 | Shake restores the exact screen; answers are queued while hidden | True unless new answers arrived while hidden. Then the newest unseen answer shows from its first line, with a marker of how many more are unseen; a press opens the next. The phone keeps the last 20 | D4 resolved: queue built (`app/src/core/inbox.ts`) |
 | 15 | Gesture engine assumed usable IMU data | Engine sits behind an adapter. Axis, sign, scale and mode come from calibration | Risk 1. Units are "still TBD". VERIFIED D/reference/faq |
 | 16 | Locked phone was a test | Locked phone is the project gate. If it fails, the owner chooses a reduced product | Risk 2. Sources conflict. Section 12 |
-| 17 | ESP32-S3 candidate | XIAO ESP32-S3 Sense. External LED on before capture, no off setting, must look like a camera | CAMERA-AND-BACKEND sections 1, 9, 11 |
+| 17 | ESP32-S3 candidate, single photo | A Linux camera board (NanoPi Duo2 or Raspberry Pi Zero 2 W) or the XIAO ESP32-S3 Sense. Single press is a burst, long press a local clip (ESP32: long burst), double press adds a page. External LED on before capture, no off setting, must look like a camera | Section 9. CAPTURE-STRATEGY.md, CAMERA-HARDWARE-EGYPT.md |
 | 18 | Not stated | Phone hotspot first, home Wi-Fi second, no native Android app in V1 | A native app cannot draw on the lens or wake the plugin. CAMERA-AND-BACKEND section 5 |
 | 19 | "Short answer, details by scrolling" | `short` at most 140 characters, plus `detail`, plus a label computed by the backend. Images deleted when the job ends | CAMERA-AND-BACKEND sections 9, 10 |
 | 20 | 12 acceptance tests, no numbers | Same 12, with proposed pass rules and links to hardware tests | Section 13 |
@@ -56,8 +59,9 @@ locked in a pocket as a bridge.
 
 Intended use: personal study and explanation of pages, screens and objects.
 
-Out of scope, and must not be designed: exam or test use, covert recording, video, timed capture, remote
-capture, audio recording, identifying people.
+Out of scope, and must not be designed: exam or test use, covert recording, sending or keeping video, timed
+capture, remote capture, audio recording, identifying people. (Clip mode scans about 2 s of frames on the camera
+and keeps at most 3 photos; no video leaves the camera or is kept. Section 9.)
 
 Hardware facts:
 
@@ -310,23 +314,62 @@ Hidden does not hide the camera from other people. Capture during Hidden still l
 
 ## 9. Camera
 
-Design from [CAMERA-AND-BACKEND.md](CAMERA-AND-BACKEND.md). Nothing is built or flashed. VERIFIED [S1] for Study
-Lens firmware being unflashed.
+Built: a Linux client (`camera/linux`, Python 3, for NanoPi Duo2 or Raspberry Pi) and ESP32 firmware
+(`camera/esp32`, XIAO ESP32-S3 Sense). The Linux client is tested with fake GPIO and a fake sensor; the firmware has
+never been compiled. No real camera has been used. Board choice and prices for Egypt are in
+[CAMERA-HARDWARE-EGYPT.md](CAMERA-HARDWARE-EGYPT.md); capture parameters and their reasons in
+[CAPTURE-STRATEGY.md](CAPTURE-STRATEGY.md).
 
-- Seeed XIAO ESP32-S3 Sense, 300 to 500 mAh LiPo, external LED, shutter button, power switch. About
-  45 x 32 x 22 mm and EUR 30 to 80. ASSUMPTION (estimates).
-- Deep sleep with a 5-minute stay-awake window. About 1.3 to 4 days at 20 captures a day, depending on how
-  many stay-awake windows run, against 4 to 7 hours always on. ASSUMPTION, computed from VERIFIED Seeed figures [S2].
-- A photo is taken only by a physical press on the camera. No remote, timed or glasses trigger.
+### 9.1 Control
+
+A capture starts only from a physical press on the camera. There is no remote, timed, glasses or phone trigger,
+and no setting that adds one.
+
+| Press | Linux board | ESP32 |
+| --- | --- | --- |
+| Single | Burst: N frames (default 4) over about 1 s. Score each, upload the best K (default 3, at most 3) | Same |
+| Long, 0.8 s or more | Clip: about 2 s of frames scanned locally, best K kept, the rest deleted. Video never leaves the camera | Long burst of 8 frames |
+| Double | Add a page to the previous question (`appendTo: "previous"`), same capture as a single press | Same |
+
+A question can have at most 4 pages and 12 photos, all sent to the AI in one request.
+
+### 9.2 Feedback
+
 - **Capture indication:** an outward-facing LED lights at least 500 ms before capture and stays on through
-  upload. No setting, build flag or remote command can disable it. It must be visible at 2 m in daylight (HT-16).
+  capture and upload. No setting, build flag or remote command can disable it. If the LED cannot be driven, the
+  camera refuses to capture. It must be visible at 2 m in daylight (HT-16).
+- LED patterns (and an optional vibration motor pin) report: captured, uploaded, retake needed, error, queue full.
+- After upload the camera polls `GET /v1/captures/:jobId` for up to 30 s and shows "retake needed" if the backend
+  says so. It never receives answer text.
+
+### 9.3 Hard conditions
+
+- **Blur and shake:** the burst gives several chances; the sharpest frames are kept and frames far below the best
+  are dropped (VERIFIED by tests on synthetic images; real thresholds EXPERIMENT NEEDED, CS-3).
+- **Bad light and glare:** each frame is scored for brightness and clipped highlights. If every frame is dark or
+  blurry, the camera retries once by itself. If every frame still fails, the backend answers `retake` with a reason in about 1 s without calling the AI.
+- **Several frames, one answer:** the AI reads the union of the frames, says what no frame showed, and reports
+  places where frames disagree. An unsettled disagreement makes the answer `UNSURE`.
+- **Focus:** no software fixes a lens focused at the wrong distance. CH-1 / CS-1 decides this for each board.
+
+### 9.4 Settings
+
+The camera reads its settings from `GET /v1/camera/config` at start and every few minutes. The phone panel changes
+them with `PUT`: default mode (burst or single), N, K, long-press mode, clip length, resolution, JPEG quality,
+minimum score, status-poll time. None of them can turn off the LED, start a capture, set a timer or enable audio.
+
+### 9.5 Device rules
+
 - It must look like a camera: visible lens, no watch shape, no disguise. § 8 TDDDG bans disguised recording
   devices. VERIFIED [S30] for the text. Application to this device is ASSUMPTION, and this is not legal advice.
-- No video and no microphone. Firmware never initialises the Sense microphone.
-- Images live in PSRAM only, never on flash or SD.
-- Connectivity: phone hotspot first, home Wi-Fi second. No native Android app in V1. Build a BLE foreground
-  service only if the hotspot fails HT-14. LTE is rejected for V1 on size and power.
-- LED patterns report: capturing, uploaded, failed, and "uploaded, glasses app not listening".
+- No microphone or audio is ever opened.
+- Frames live in RAM only (PSRAM on the ESP32, the RAM disk under `/run` on Linux), never on flash or SD. The
+  offline queue for presses taken without network also lives on the RAM disk, so a power cut loses it.
+- Uploaded frames are re-encoded without metadata, at most 2208 px on the long edge.
+- Connectivity: phone hotspot first, home Wi-Fi second. No native Android app in V1. LTE is rejected for V1 on size
+  and power.
+- Battery: a Linux board must stay switched on for a session (cold boot about 15-40 s, ESTIMATE); the ESP32 sleeps
+  and wakes on the press. ASSUMPTION, CH-4, CH-5.
 
 ## 10. Backend and AI
 
@@ -338,6 +381,8 @@ Reuse most of Study Lens, with the changes in [PLAN.md](PLAN.md). Never run with
 
 - Upload: HTTPS, device token bound to the device ID, idempotency key reserved before the image is written,
   rate limit.
+- Upload: `POST /v1/captures`, multipart with a `meta` part and up to 3 frames, one idempotency key per press. Full
+  contract in [API.md](API.md).
 - The upload response carries `glassesListening`, so the camera can show its LED pattern. This replaces any
   phone notification.
 - Delivery: the plugin long-polls and is the only path to the lens. Results wait on the server until fetched.
@@ -351,18 +396,23 @@ Reuse most of Study Lens, with the changes in [PLAN.md](PLAN.md). Never run with
   and separate `reading` and `reasoning` confidence. Full schema in CAMERA-AND-BACKEND section 10.
 - The plugin joins these into one document and scrolls it by line. Section 10 of that study assumed pages.
   **Line offset replaces page index** (risk 6 closed).
-- The label is computed by the backend, never by the model: `CHECKED`, `LIKELY`, `UNSURE`, `CHECK FAILED`,
-  `RETAKE`. `CHECKED` means listed steps were confirmed by a computer, not that the page was read correctly.
-- Model: `claude-opus-5-5` behind the `SolveProvider` interface.
+- The label is computed by the backend, never by the model: `CHECKED`, `LIKELY`, `UNSURE`, `RETAKE`. A failed
+  computer check gives `UNSURE` plus a caveat; the separate `CHECK FAILED` label is folded in (owner decision D9).
+  `CHECKED` means listed steps were confirmed by a computer and nothing was unreadable, not that the page was read
+  correctly.
+- Retake reasons: too dark, blurry, page cut off, glare, too far, no text found.
+- Model: `claude-opus-5-5`, adaptive thinking, effort `low`, behind the `FusionProvider` interface. A deterministic
+  mock provider is used for all tests. The Anthropic provider has never been called.
 - Answers are plain text. Unknown glyphs are dropped silently. VERIFIED D/build/display. HT-15 checks German
   letters.
 - Latency target: median under 15 s from press to first text. Budget 5 to 21 s connected, 6 to 26 s from deep
-  sleep. ASSUMPTION (estimates). The plugin shows `PROCESSING` within 2 s of upload when VISIBLE.
+  sleep. ASSUMPTION (estimates). When VISIBLE, the plugin shows `RECEIVED n PHOTOS`, then `READING...`, then the
+answer or `Retake: <reason>`. In HIDDEN or REMOVED it shows nothing.
 
 ## 11. Privacy, security and use
 
 - This repository is public. No tokens, `.env`, `config.h`, keys or IMU logs in it. Only `*.example` files.
-  `.gitignore` covers `.env`, keys and IMU logs today. VERIFIED `.gitignore`. Add `config.h` with the firmware in Phase 3.
+  `.gitignore` covers `.env`, keys, IMU logs, `config.h`, `camera.env`, `.venv` and `node_modules`. VERIFIED `.gitignore`.
 - The provider key stays on the backend. The plugin's client token is entered at runtime and never committed.
 - Every network origin is listed in the `app.json` whitelist, and CORS still applies. VERIFIED D/build/networking.
 - Images are deleted when the job reaches `done` or `failed`, with a hard limit of 1 hour. Result text 30 days.
@@ -432,15 +482,19 @@ synthetic motion. That suite has 31 tests, all passing. VERIFIED `npm test`.
 | Q1 | If Android reloads the plugin on every lock, "never reveal after restart" blanks the lens at each lock. Keep the rule? | Keep it for V1 and measure how often it happens | G0 |
 | Q2 | If HT-4 fails: phone unlocked in pocket, or reduced locked mode? | Depends on what fails. See PLAN gate G0 | G0 |
 | D3 | Connection lost while VISIBLE hides content | Keep. It is the safe direction | Phase 1 |
-| D4 | V0.2 asks to queue answers while hidden. The prototype keeps only the newest, and the next shake shows it from line 1 | Build a real queue in Phase 2, when the backend already holds the last 20 results. Until then, one stored answer is a known gap | Phase 1 |
+| D4 | **Resolved 2026-11-08.** Answers arriving while hidden are queued: the phone keeps the last 20, the newest unseen shows first on restore with a count of the others, and a press opens the next | Built, simulator-tested | Done |
+| D8 | Which camera board to buy | See CAMERA-HARDWARE-EGYPT.md: start with the Duo2 kit and test focus (CH-1) on day one, or the ESP32-CAM test rig; Pi Zero 2 W + Camera Module 3 when the board is back in stock | Phase 3 |
+| D9 | Keep `CHECK FAILED` as its own label, or fold it into `UNSURE` plus a caveat (as built) | Folded, as built | Phase 2 |
+| D10 | Approve the capture changes: `frames[].issues`, `frameConflicts`, the 4-page cap; decide on `adaptiveK` and extra retake reasons (CAPTURE-STRATEGY.md section 12) | Approve the built ones, defer `adaptiveK` until CS-7 | Phase 3 |
 | D5 | At the hold limit, return to the starting line, or stop where it is | Return, then confirm with HT-11 | Phase 1 |
 | D6 | Approve the changes table above, including personal Beta only | Approve | Before Phase 1 |
 | D7 | Pass rules in section 13 | Confirm or adjust | Before Phase 1 |
 
 ## 15. Built and not built
 
-The simulator prototype passes typecheck, 361 of 361 unit tests, and 17 of 17 real simulator checks. VERIFIED
-`npm test`, `npm run sim:e2e`, both run on 2026-11-07. It does not implement these parts of this spec:
+Built and tested without hardware on 2026-11-08 (counts in the README "Test results" table): the glasses app
+in the simulator, the backend with the mock AI, the Linux camera client with fakes, and a full-system test of all
+three together (`tools/e2e-system`). Not built or not run:
 
 | Spec item | Section |
 | --- | --- |
@@ -450,8 +504,9 @@ The simulator prototype passes typecheck, 361 of 361 unit tests, and 17 of 17 re
 | Setup checklist on the phone panel | 2 |
 | Scroll speed cap at 5 lines a second (range allows 30) | 3.2 |
 | Removing the simulator tools from the Beta build | 4 |
-| Network client, `app.json` whitelist, client token entry | 10, 11 |
-| Backend, camera firmware, camera hardware | 9, 10 |
+| ESP32 firmware compiled and flashed | 9 |
+| Anthropic provider called for real | 10 |
+| Any camera board, button, LED or motor | 9 |
 
 Known limits of what is built:
 
@@ -460,3 +515,4 @@ Known limits of what is built:
 - A stored neutral more than 15 degree-equivalents wrong leaves tilt dead until recalibration.
 - Calibration assumes a wrap period of 360, so it cannot infer one for radian data. HT-2 decides whether this matters.
 - In rate mode, leftover sensor bias is not corrected.
+- Frame-quality thresholds were set on synthetic images only.

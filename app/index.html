@@ -37,6 +37,49 @@
           <button id="aiError" type="button">AI error</button>
           <button id="touchPress" type="button">Touch press</button>
         </div>
+        <h2>Fake camera job (same path as backend events)</h2>
+        <div class="row">
+          <button id="jobReceived" type="button">3 photos received</button>
+          <button id="jobProcessing" type="button">Reading</button>
+          <button id="jobReady" type="button">Ready</button>
+          <button id="jobRetake" type="button">Retake: too dark</button>
+        </div>
+      </details>
+
+      <details>
+        <summary>Backend</summary>
+        <p class="meta" id="backendStatus"></p>
+        <form id="backendForm" autocomplete="off">
+          <label>Server address <input id="serverUrl" type="url" placeholder="https://your-server.example" /></label>
+          <label>Client token <input id="clientToken" type="password" placeholder="Stored on this phone only" /></label>
+          <div class="row">
+            <button type="submit">Save and connect</button>
+            <button id="backendForget" type="button">Forget</button>
+          </div>
+          <p id="backendMsg" class="meta"></p>
+        </form>
+        <p class="meta">The token is kept in this phone's app storage and never shown again. The server address must be listed in app.json under the network whitelist.</p>
+      </details>
+
+      <details>
+        <summary>Camera</summary>
+        <p class="meta">The camera reads these when it wakes. A photo is only ever taken by its button, and its LED always lights first.</p>
+        <form id="cameraForm" autocomplete="off">
+          <label>Single press
+            <select id="camDefaultMode"><option value="burst">Burst: several photos, best ones sent</option><option value="single">One photo</option></select>
+          </label>
+          <label>Photos per burst (N) <input id="camBurstFrames" type="number" min="1" max="8" step="1" /></label>
+          <label>Best photos sent (K, at most 3) <input id="camUploadFrames" type="number" min="1" max="3" step="1" /></label>
+          <label>Long press
+            <select id="camLongPress"><option value="clip">Short clip, frames picked on the camera (Linux camera)</option><option value="burst">Long burst</option></select>
+          </label>
+          <label>Resolution <select id="camResolution"></select></label>
+          <div class="row">
+            <button id="camLoad" type="button">Load from server</button>
+            <button type="submit">Save to server</button>
+          </div>
+          <p id="camMsg" class="meta"></p>
+        </form>
       </details>
 
       <details>
@@ -45,6 +88,7 @@
           <div id="settingsEnd"></div>
           <label class="check"><input id="tiltEnabled" type="checkbox" /> Tilt to scroll</label>
           <label class="check"><input id="trustWear" type="checkbox" /> Trust the wear sensor</label>
+          <label class="check"><input id="activityAware" type="checkbox" /> Ask for clearer gestures while walking or talking</label>
           <button type="submit">Save</button>
           <span id="settingsSaved" class="meta"></span>
         </form>
@@ -65,6 +109,25 @@
           <button id="calAccept" type="button" hidden>Accept</button>
           <button id="calCancel" type="button" hidden>Cancel</button>
         </div>
+      </details>
+
+      <details>
+        <summary>Personal calibration</summary>
+        <p class="meta">Run the Calibration wizard first. Then record at least 3 examples each of shake, tilt up and tilt down, and some ordinary movement (looking around, talking, walking) that must not count. Gestures are paused while recording.</p>
+        <div class="row">
+          <button type="button" data-example="shake">Record shake</button>
+          <button type="button" data-example="tiltUp">Record tilt up</button>
+          <button type="button" data-example="tiltDown">Record tilt down</button>
+          <button type="button" data-example="other">Record ordinary movement</button>
+          <button id="exampleStop" type="button">Stop</button>
+        </div>
+        <p id="exampleStatus" class="meta"></p>
+        <div class="row">
+          <button id="personalAnalyse" type="button">Propose thresholds</button>
+          <button id="personalAccept" type="button" hidden>Accept</button>
+          <button id="personalClear" type="button">Clear examples</button>
+        </div>
+        <pre id="personalOut" class="meta"></pre>
       </details>
 
       <details>

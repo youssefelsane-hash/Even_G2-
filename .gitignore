@@ -25,3 +25,11 @@ imu-log-*.json
 
 # Camera firmware secrets
 config.h
+
+# Python (camera client, scripts)
+.venv/
+__pycache__/
+*.pyc
+
+# Camera device settings (hold the device token)
+camera.env

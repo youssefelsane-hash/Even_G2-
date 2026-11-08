@@ -21,6 +21,9 @@ export interface Session {
   details: string;
   topLine: number;
   unseen: boolean;
+  /** Backend label of the open answer, such as CHECKED. Absent for the welcome text and sample answers. */
+  label?: string;
+  pages?: number;
 }
 
 export async function loadSettings(store: KeyValueStore): Promise<Settings> {
@@ -46,13 +49,16 @@ export async function loadSession(store: KeyValueStore): Promise<Session | null>
     if (!raw) return null;
     const s = JSON.parse(raw) as Partial<Session>;
     if (typeof s.docId !== 'string' || typeof s.short !== 'string' || typeof s.details !== 'string') return null;
-    return {
+    const out: Session = {
       docId: s.docId,
       short: s.short,
       details: s.details,
       topLine: typeof s.topLine === 'number' && Number.isFinite(s.topLine) ? s.topLine : 0,
       unseen: s.unseen === true,
     };
+    if (typeof s.label === 'string') out.label = s.label.slice(0, 20);
+    if (typeof s.pages === 'number' && Number.isFinite(s.pages)) out.pages = Math.min(99, Math.max(1, Math.round(s.pages)));
+    return out;
   } catch {
     return null;
   }

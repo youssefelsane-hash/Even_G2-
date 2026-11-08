@@ -1,13 +1,15 @@
+import { ActivityMonitor, type ActivityLevel } from './activity.ts';
 import { wrapDelta, type ImuSignal } from './imuAdapter.ts';
-import { ShakeDetector } from './shakeDetector.ts';
+import { ShakeDetector, type ShakeReject } from './shakeDetector.ts';
 import type { Settings } from './settings.ts';
 
 export type Direction = 'up' | 'down';
 export type TiltStopReason = 'neutral' | 'overshoot' | 'hold-limit' | 'shake' | 'gap' | 'reset';
 
 export type GestureEvent =
-  | { type: 'shake'; t: number }
-  | { type: 'tiltStart'; t: number; direction: Direction }
+  /** `confidence` is 0 to 1: how clearly every limit was passed. */
+  | { type: 'shake'; t: number; confidence: number }
+  | { type: 'tiltStart'; t: number; direction: Direction; confidence: number }
   | { type: 'scroll'; t: number; direction: Direction; lines: number }
   | { type: 'tiltStop'; t: number; reason: TiltStopReason }
   | { type: 'neutral'; t: number; pitch: number };
@@ -19,6 +21,9 @@ export interface EngineStatus {
   neutral: number | null;
   deviation: number | null;
   shakeSuspect: boolean;
+  activity: ActivityLevel;
+  /** Why the last shake-like motion did not count. */
+  shakeReject: ShakeReject;
 }
 
 // Turns pitch/yaw signals into gestures.
@@ -31,6 +36,8 @@ export interface EngineStatus {
 export class GestureEngine {
   private cfg: Settings;
   private shake: ShakeDetector;
+  private activity: ActivityMonitor;
+  private peakDev = 0;
 
   private smooth: number | null = null;
   private neutral: number | null = null;
@@ -55,12 +62,14 @@ export class GestureEngine {
   constructor(cfg: Settings) {
     this.cfg = cfg;
     this.shake = new ShakeDetector(cfg);
+    this.activity = new ActivityMonitor(cfg);
     this.reacquireNeutral();
   }
 
   configure(cfg: Settings): void {
     this.cfg = cfg;
     this.shake.configure(cfg);
+    this.activity.configure(cfg);
     this.reacquireNeutral();
   }
 
@@ -79,6 +88,7 @@ export class GestureEngine {
     this.crossT = null;
     this.lastDev = null;
     this.shake.reset();
+    this.activity.reset();
   }
 
   /** Drops anything in progress. Returns a stop event if scrolling was active. */
@@ -89,7 +99,14 @@ export class GestureEngine {
   }
 
   status(t: number): EngineStatus {
-    return { phase: this.phase, neutral: this.neutral, deviation: this.lastDev, shakeSuspect: this.shake.suspect(t) };
+    return {
+      phase: this.phase,
+      neutral: this.neutral,
+      deviation: this.lastDev,
+      shakeSuspect: this.shake.suspect(t),
+      activity: this.activity.level(t),
+      shakeReject: this.shake.rejected,
+    };
   }
 
   // Angles from different sessions can sit on opposite sides of the wrap point.
@@ -131,6 +148,7 @@ export class GestureEngine {
 
   private stop(t: number, reason: TiltStopReason, out: GestureEvent[]): void {
     out.push({ type: 'tiltStop', t, reason });
+    this.activity.exclude(this.enterT, t);
     this.phase = 'locked';
     this.cooldownUntil = t + this.cfg.tiltCooldownMs;
   }
@@ -139,7 +157,11 @@ export class GestureEngine {
     const c = this.cfg;
     const abs = Math.abs(dev);
     const dir: Direction = dev > 0 ? 'up' : 'down';
-    const threshold = this.direction === 'up' ? c.tiltUpDeg : c.tiltDownDeg;
+    // While walking or talking the head bobs, so a tilt must go further. The
+    // raised threshold always stays below the upper limit.
+    const boost = this.activity.level(s.t).tiltBoostDeg;
+    const plain = this.direction === 'up' ? c.tiltUpDeg : c.tiltDownDeg;
+    const threshold = Math.min(plain + boost, Math.max(plain, c.tiltMaxDeg - 2));
     const busy = this.shake.suspect(s.t);
 
     switch (this.phase) {
@@ -155,12 +177,14 @@ export class GestureEngine {
             this.direction = dir;
             this.enterT = s.t;
             this.crossT = null;
+            this.peakDev = 0;
           }
         }
         return;
       case 'candidate': {
         if (abs <= c.deadZoneDeg || dir !== this.direction) { this.phase = 'armed'; return; }
         if (busy || abs > c.tiltMaxDeg) { this.phase = 'locked'; return; }
+        this.peakDev = Math.max(this.peakDev, abs);
         if (this.crossT === null) {
           if (abs >= threshold) this.crossT = s.t;
           else if (s.t - this.enterT > c.tiltEntryMaxMs) this.phase = 'locked';
@@ -171,7 +195,7 @@ export class GestureEngine {
           this.phase = 'active';
           this.holdStartT = s.t;
           this.lines = 0;
-          out.push({ type: 'tiltStart', t: s.t, direction: this.direction });
+          out.push({ type: 'tiltStart', t: s.t, direction: this.direction, confidence: this.tiltConfidence(threshold) });
           out.push({ type: 'scroll', t: s.t, direction: this.direction, lines: 1 });
         }
         return;
@@ -192,6 +216,23 @@ export class GestureEngine {
     }
   }
 
+  // Margin over the threshold, room below the upper limit, and how fast the
+  // threshold was reached compared with the allowed entry time.
+  private tiltConfidence(threshold: number): number {
+    const c = this.cfg;
+    const over = (this.peakDev - threshold) / Math.max(1, threshold * 0.4);
+    const room = (c.tiltMaxDeg - this.peakDev) / Math.max(1, (c.tiltMaxDeg - threshold) * 0.5);
+    const speed = this.crossT === null ? 0 : 1 - (this.crossT - this.enterT) / c.tiltEntryMaxMs;
+    const parts = [over, room, speed].map((v) => Math.min(1, Math.max(0, v)));
+    const mean = parts.reduce((a, b) => a + b, 0) / parts.length;
+    return Math.round((0.5 * mean + 0.5 * Math.min(...parts)) * 100) / 100;
+  }
+
+  /** Background activity right now, for the panel and the logger. */
+  activityLevel(t: number): ActivityLevel {
+    return this.activity.level(t);
+  }
+
   push(s: ImuSignal): GestureEvent[] {
     const out: GestureEvent[] = [];
     const c = this.cfg;
@@ -200,6 +241,7 @@ export class GestureEngine {
       out.push(...this.reset('gap'));
       this.stillStartT = null;
       this.smooth = s.pitch;
+      this.activity.interrupt();
       if (c.imuMode === 'rate') {
         // Integration stopped during the gap, but the head did not.
         this.neutral = null;
@@ -211,17 +253,22 @@ export class GestureEngine {
     this.smooth = this.smooth === null ? s.pitch : this.smooth + (s.pitch - this.smooth) * alpha;
     const pitch = this.smooth;
     this.updateNeutral(s, pitch, out);
+    this.activity.push(s.t, s.yaw, pitch);
 
     // Shake is checked first and always wins over tilt.
     const inCooldown = s.t < this.shakeCooldownUntil;
     if (inCooldown) {
       this.shake.reset();
-    } else if (this.shake.push(s.t, s.yaw, pitch)) {
-      if (this.phase === 'active') out.push({ type: 'tiltStop', t: s.t, reason: 'shake' });
-      this.phase = 'locked';
-      this.shakeCooldownUntil = s.t + c.shakeCooldownMs;
-      out.push({ type: 'shake', t: s.t });
-      return out;
+    } else {
+      this.shake.setBoost(this.activity.level(s.t).shakeBoost);
+      if (this.shake.push(s.t, s.yaw, pitch)) {
+        if (this.phase === 'active') out.push({ type: 'tiltStop', t: s.t, reason: 'shake' });
+        this.phase = 'locked';
+        this.shakeCooldownUntil = s.t + c.shakeCooldownMs;
+        this.activity.exclude(this.shake.chainStart - 200, s.t + c.shakeCooldownMs);
+        out.push({ type: 'shake', t: s.t, confidence: this.shake.confidence });
+        return out;
+      }
     }
 
     if (this.neutral === null) return out;

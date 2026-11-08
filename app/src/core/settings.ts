@@ -54,6 +54,20 @@ export interface Settings {
   shakeAmpRatio: number;
   shakeGuardMs: number;
   shakeCooldownMs: number;
+  /** Longest time the head may rest at one side inside a shake. Rejects quick left-right looks. */
+  shakeMaxPlateauMs: number;
+  /** Band near a turning point that counts as resting, as a fraction of the swing. */
+  shakePlateauFrac: number;
+  // Background motion: ask for a clearer gesture while walking or talking
+  activityAware: boolean;
+  activityWindowMs: number;
+  activityDelayMs: number;
+  activityQuietDeg: number;
+  activityFullDeg: number;
+  activityShakeBoost: number;
+  activityTiltBoostDeg: number;
+  /** After a shake hides the lens, a double press within this time undoes it. 0 turns it off. */
+  undoHideMs: number;
   // Wear and recovery
   trustWearSensor: boolean;
   wearSettleMs: number;
@@ -113,6 +127,17 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   shakeAmpRatio: 3,
   shakeGuardMs: 300,
   shakeCooldownMs: 1200,
+  shakeMaxPlateauMs: 110,
+  shakePlateauFrac: 0.05,
+
+  activityAware: true,
+  activityWindowMs: 8000,
+  activityDelayMs: 1500,
+  activityQuietDeg: 5,
+  activityFullDeg: 10,
+  activityShakeBoost: 1.6,
+  activityTiltBoostDeg: 6,
+  undoHideMs: 4000,
 
   trustWearSensor: true,
   wearSettleMs: 1500,
@@ -162,6 +187,15 @@ const RANGES: Record<NumberKey, [number, number]> = {
   shakeAmpRatio: [1, 20],
   shakeGuardMs: [0, 5000],
   shakeCooldownMs: [0, 20_000],
+  shakeMaxPlateauMs: [20, 5000],
+  shakePlateauFrac: [0.01, 0.4],
+  activityWindowMs: [2000, 60_000],
+  activityDelayMs: [0, 10_000],
+  activityQuietDeg: [0, 90],
+  activityFullDeg: [0.5, 180],
+  activityShakeBoost: [1, 3],
+  activityTiltBoostDeg: [0, 30],
+  undoHideMs: [0, 30_000],
   wearSettleMs: [0, 30_000],
   recoveryPresses: [3, 10],
   recoveryWindowMs: [500, 20_000],
@@ -194,6 +228,7 @@ export function sanitizeSettings(input: unknown, base: Readonly<Settings> = DEFA
   if (isSign(src.yawSign)) out.yawSign = src.yawSign;
   if (typeof src.tiltEnabled === 'boolean') out.tiltEnabled = src.tiltEnabled;
   if (typeof src.trustWearSensor === 'boolean') out.trustWearSensor = src.trustWearSensor;
+  if (typeof src.activityAware === 'boolean') out.activityAware = src.activityAware;
   if (src.neutralPitch === null) out.neutralPitch = null;
   else if (typeof src.neutralPitch === 'number' && Math.abs(src.neutralPitch) <= MAX_NEUTRAL) out.neutralPitch = src.neutralPitch;
 
@@ -216,6 +251,7 @@ export function sanitizeSettings(input: unknown, base: Readonly<Settings> = DEFA
   out.shakeMaxSwingMs = Math.max(out.shakeMaxSwingMs, out.shakeMinSwingMs + 1);
   out.shakeMaxTotalMs = Math.max(out.shakeMaxTotalMs, Math.ceil(out.shakeSwings * out.shakeMinSwingMs * 1.5));
   out.shakeMinRateDps = Math.min(out.shakeMinRateDps, (0.5 * out.shakeSensitivity * out.shakeMaxAmpDeg * 1000) / Math.max(out.shakeMinSwingMs, 1));
+  out.activityFullDeg = Math.max(out.activityFullDeg, out.activityQuietDeg + 0.5);
   // Keep touch recovery reachable by a person.
   out.recoveryWindowMs = Math.max(out.recoveryWindowMs, out.recoveryPresses * MIN_PRESS_MS);
   return out;

@@ -18,6 +18,7 @@ export type MachineEvent =
   | { type: 'SHAKE' }
   | { type: 'SCROLL'; source: 'tilt' | 'touch' }
   | { type: 'TOUCH_RECOVERY' }
+  | { type: 'UNDO_HIDE' }
   | { type: 'ACK' }
   | { type: 'WEAR'; wear: Wear }
   | { type: 'CONNECTION'; connected: boolean }
@@ -71,6 +72,11 @@ export function reduce(s: MachineState, e: MachineEvent): Transition {
       // Works when the wear state is unknown, so a failed sensor cannot trap
       // the app. Never works when the glasses are reported as removed.
       if (s.mode !== 'HIDDEN' || s.wear === 'removed') return no;
+      return yes(reveal(s));
+
+    case 'UNDO_HIDE':
+      // Stricter than touch recovery: only while the glasses are known to be worn.
+      if (s.mode !== 'HIDDEN' || s.wear !== 'worn') return no;
       return yes(reveal(s));
 
     case 'ACK':

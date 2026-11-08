@@ -12,9 +12,13 @@ export class Rig {
   exits = 0;
   store: KeyValueStore;
   a!: Assistant;
+  displayed: string[] = [];
+  presence: string[] = [];
+  extra: Partial<AssistantDeps>;
 
-  constructor(store: KeyValueStore = new MemoryStore()) {
+  constructor(store: KeyValueStore = new MemoryStore(), extra: Partial<AssistantDeps> = {}) {
     this.store = store;
+    this.extra = extra;
   }
 
   async start(): Promise<this> {
@@ -23,6 +27,9 @@ export class Rig {
       now: () => this.time,
       onPlan: (p, force) => { this.plans.push(p); this.forced.push(force); },
       onExitRequest: () => this.exits++,
+      onDisplayed: (id) => this.displayed.push(id),
+      onPresence: (m) => this.presence.push(m),
+      ...this.extra,
     };
     this.a = await Assistant.create(deps);
     return this;

@@ -27,6 +27,8 @@ export interface HostLinkOptions {
   log?(line: string): void;
   /** The app has ended: stop timers. */
   onClosed?(): void;
+  /** The app came back to the foreground: for example, poll the backend now. */
+  onForeground?(): void;
 }
 
 const IMU_RETRY_MS = 10_000;
@@ -115,6 +117,7 @@ export class HostLink {
         assistant.handleForeground();
         void this.startImu();
         void this.readStatus(); // status events may have been missed while away
+        this.o.onForeground?.();
         return;
       case 'background':
         void assistant.flush();

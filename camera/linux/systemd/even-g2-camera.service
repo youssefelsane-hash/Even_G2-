@@ -1,0 +1,44 @@
+# Even G2 camera client. Installed by camera/linux/setup.sh.
+# Settings (server URL, device token, pins) live in /etc/even-g2-camera/camera.env,
+# readable by root only; systemd reads it before dropping privileges.
+[Unit]
+Description=Even G2 camera client (button-triggered, LED-indicated)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=evencam
+Group=evencam
+SupplementaryGroups=video gpio
+EnvironmentFile=/etc/even-g2-camera/camera.env
+# Photos and clips live only here: a RAM disk under /run, wiped on stop and reboot.
+RuntimeDirectory=even-g2-camera
+RuntimeDirectoryMode=0700
+Environment=STATE_DIR=/run/even-g2-camera
+# Runs as root ("+"): exports sysfs GPIO pins and hands them to the service user.
+# Does nothing when GPIO_BACKEND=gpiod.
+ExecStartPre=+/opt/even-g2-camera/gpio-export.sh
+ExecStart=/usr/bin/python3 -I /opt/even-g2-camera/run_camera.py
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=15
+
+# Hardening. The client needs the network, /dev/video*, /dev/gpiochip* (or
+# /sys/class/gpio) and its RAM directory, nothing else.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=no
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+ReadWritePaths=/run/even-g2-camera
+# Device access is left open on purpose: the Raspberry Pi camera stack needs several
+# device nodes (media, v4l-subdev, dma_heap) whose names differ between releases.
+# The service user is only in the video and gpio groups, not audio, so it cannot
+# open sound devices.
+
+[Install]
+WantedBy=multi-user.target

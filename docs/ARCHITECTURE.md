@@ -1,7 +1,11 @@
 # Architecture
 
-Date: 2026-11-07. This describes the design in [SPEC-V0.3.md](SPEC-V0.3.md). Only the plugin exists today, as a
-simulator prototype in `app/`. The backend and camera are designs. Nothing has run on real hardware.
+Date: 2026-11-07, updated 2026-11-08. This describes the design in [SPEC-V0.3.md](SPEC-V0.3.md). All three parts
+are built and run together on one computer (`tools/e2e-system`): the plugin in the simulator (`app/`), the backend
+with the mock AI (`backend/`), and the Linux camera client with a fake button and fake images (`camera/linux`). The
+ESP32 firmware (`camera/esp32`) has never been compiled. **Nothing has run on real hardware.** The HTTP contract is
+[API.md](API.md); capture choices are in [CAPTURE-STRATEGY.md](CAPTURE-STRATEGY.md); board choice is in
+[CAMERA-HARDWARE-EGYPT.md](CAMERA-HARDWARE-EGYPT.md).
 
 Labels and source keys are as defined in [SDK-APIS.md](SDK-APIS.md). HT numbers point to
 [HARDWARE-TESTS.md](HARDWARE-TESTS.md).
@@ -11,7 +15,7 @@ Labels and source keys are as defined in [SDK-APIS.md](SDK-APIS.md). HT numbers 
 ```mermaid
 flowchart LR
   subgraph Wearable["On the body"]
-    CAM["Camera<br/>XIAO ESP32-S3 Sense<br/>button, LED"]
+    CAM["Camera<br/>Linux board (NanoPi Duo2 / Pi Zero 2 W)<br/>or XIAO ESP32-S3 Sense<br/>button, LED, optional motor"]
     G2["Even G2 glasses<br/>display, IMU, touchpads,<br/>wear sensor, firmware"]
   end
 
@@ -34,7 +38,7 @@ flowchart LR
 
   AI["AI provider<br/>claude-opus-5-5"]
 
-  CAM -- "JPEG over Wi-Fi" --> HOT
+  CAM -- "up to 3 JPEGs per press over Wi-Fi" --> HOT
   HOT -- "HTTPS over mobile data" --> API
   API --> STORE
   STORE --> WORK
@@ -60,11 +64,12 @@ Three facts shape this design:
 
 | Component | Responsible for | Must never | Status |
 | --- | --- | --- | --- |
-| Camera firmware | Button, LED before capture, one JPEG in PSRAM, upload with retry and idempotency key, LED patterns, deep sleep | Capture without the LED. Video, timed or remote capture. Use the microphone. Write images to flash | Study Lens code compiles, never flashed. Needs changes |
+| Camera client, Linux (`camera/linux`) | Button (single, long, double press), LED on before any capture, burst of N frames or a 2 s local clip, on-device scoring, upload of the best K (at most 3) with one idempotency key per press, offline queue on the RAM disk, status poll for the retake signal, settings from `GET /v1/camera/config` | Capture without the LED. Send video. Timed or remote capture. Open audio. Write frames or clips to the SD card | Built. Tested with fake GPIO and a fake sensor |
+| Camera firmware, ESP32 (`camera/esp32`) | Same rules, burst only (long press is an 8-frame burst), frames in PSRAM, deep sleep | Same as above, and never initialise the microphone | Written, never compiled or flashed |
 | Phone hotspot | Carry camera traffic to the internet | | Setup step. HT-14 |
-| API server | Auth, upload, job records, long-poll, `received` event, `glassesListening` in the upload reply | Send anything to the phone's notification system | Reuse with changes |
-| Worker | Call the AI, run the SymPy check, compute the label, delete the image | Let the model write the label. Log answer text | Reuse with changes |
-| AI provider | Read the photo and explain it | Hold the API key anywhere except the server | Behind `SolveProvider` |
+| API server (`backend/src/server.ts`) | Auth, multipart upload, frame checks, job records, append-a-page, camera config, long-poll, `received` and status events, `glassesListening` in the upload reply | Send anything to the phone's notification system | Built, mock AI only |
+| Worker (`backend/src/worker.ts`) | Drop frames that fail the checks (or return `retake` without calling the AI), send every frame of the question in one request, run the SymPy check, compute the label, delete the images when the job ends (hard limit 1 h) | Let the model write the label. Log answer text | Built, mock AI only |
+| AI provider | Read the union of all frames, say what no frame showed and where frames disagree | Hold the API key anywhere except the server | Behind `FusionProvider`: `anthropic` (type-checked, never called) or `mock` |
 | Even app (host) | Bluetooth link, WebView, storage, contextual menu, notification forwarding | Not ours to change | Third party |
 | Glasses firmware | Render pages, report IMU, touch and wear. Wear Detection, HeadUp, Silent Mode | Not ours to change | Third party |
 | SDK layer (`main.ts`, `glasses.ts`, `hostEvents.ts`, `hostLink.ts`) | Translate SDK events to app inputs and display plans to bridge calls. Start, retry and stop the IMU. Clean up on exit | Hold state logic. `hostLink.ts` takes a small bridge interface, so it is tested in Node | Built |
@@ -74,9 +79,9 @@ Three facts shape this design:
 | State machine (`stateMachine.ts`) | Pure `mode`, `job`, `wear` transitions | Store `mode`. Reveal on anything but a restore action | Built |
 | Pager (`paging.ts`) | Wrap with firmware font metrics, own the line offset | Rely on firmware scroll | Built |
 | Render queue (`renderQueue.ts`) | One display update at a time, keep newest plan only, retry a failed blank | Let a hide queue behind older updates. It can still wait up to about 2.5 s for one call already in flight | Built |
-| Storage (`storage.ts`, `settings.ts`) | Settings, last answer, line offset, `unseen`, debounced writes | Store Visible or Hidden | Built |
+| Storage (`storage.ts`, `settings.ts`, `inbox.ts`) | Settings, the last 20 answers with a seen flag, line offset, debounced writes | Store Visible or Hidden | Built |
 | Assistant (`assistant.ts`) | Connect the parts. `plan()` is the single decision on what the lens shows | | Built |
-| Backend client | Long-poll, backoff, cursor, split acks. Hand results to the Assistant | Draw directly on the lens | Not built. Reuse SL `client.ts` |
+| Backend client (`backend.ts`) | Long-poll, backoff, cursor, split acks, presence. Hand events to the Assistant | Draw directly on the lens | Built |
 | Phone panel (`panel.ts`, `index.html`) | Status, settings, calibration wizard, raw logger, phone `Show` | Show answer text | Built, except `Show` and the setup checklist |
 
 ## The reveal rule
@@ -112,8 +117,9 @@ stateDiagram-v2
   }
 ```
 
-The job also runs while HIDDEN or REMOVED, but nothing is drawn. The result is stored with `unseen` set, and
-appears on the next restore.
+The job also runs while HIDDEN or REMOVED, but nothing is drawn: no camera status and no answer. Each result is
+stored unseen in the inbox (the newest 20 are kept). On the next restore the newest unseen answer shows first, with
+a marker of how many more are waiting; a press opens the next one.
 
 ## Data flow 1: capture to lens
 
@@ -130,16 +136,20 @@ sequenceDiagram
   participant G as Glasses
 
   P->>S: long-poll for jobs after cursor
-  U->>C: press button
-  C->>C: LED on, wait 500 ms, capture to PSRAM
-  C->>S: POST capture, device token, idempotency key
+  U->>C: single press (long press: 2 s clip, double press: add a page)
+  C->>C: LED on, wait 500 ms, burst of 4 frames over about 1 s
+  C->>C: score sharpness, exposure, glare; keep the best 1 to 3
+  C->>S: POST /v1/captures, meta + frame0..frame2, idempotency key
   S-->>C: 202, job ID, glassesListening
   S-->>P: received event
-  P->>G: textContainerUpgrade, PROCESSING line
-  S->>A: image and prompt
-  A-->>S: structured answer
-  S->>S: SymPy check, compute label, delete image
-  S-->>P: result
+  P->>G: RECEIVED n PHOTOS, then READING...
+  S->>S: frame checks; if every frame fails, retake without the AI
+  S->>A: all frames of the question in one request
+  A-->>S: structured answer, unreadable parts, frame conflicts
+  S->>S: SymPy check, compute label, delete images when the job ends
+  S-->>P: ready or retake event
+  C->>S: GET /v1/captures/:jobId for up to 30 s
+  S-->>C: status, retake reason, LED pattern
   P->>S: ack receivedAt
   P->>P: store, wrap lines, line offset 0
   P->>G: textContainerUpgrade, label and short answer
@@ -153,20 +163,21 @@ What each hop carries:
 
 | Hop | Data | Protection |
 | --- | --- | --- |
-| Camera to server | JPEG, device ID, key | TLS with pinned root, device token bound to the ID, rate limit |
-| Server to AI provider | JPEG, prompt | TLS. Retention under the provider's terms, [S26] |
+| Camera to server | Up to 3 JPEGs per press, re-encoded without metadata, plus scores. Never video | TLS (reverse proxy), device token bound to the ID, rate limit |
+| Server to AI provider | All JPEGs of the question, prompt | TLS. Retention under the provider's terms, [S26] |
 | Server to plugin | Answer text | TLS, client token, whitelisted origin, CORS |
 | Plugin to glasses | One screen of text | Host's Bluetooth link |
-| Storage on phone | Last answer, offset, settings | `setLocalStorage`. No secrets in the repo |
+| Storage on phone | Last 20 answers, offset, settings | `setLocalStorage`. No secrets in the repo |
 
 Failure handling:
 
 | Failure | Result |
 | --- | --- |
-| Upload fails | Camera retries with the same key, then drops the photo and shows the failure LED pattern |
+| Upload fails | Camera keeps the press in its RAM-disk queue and retries with the same key when the network returns |
 | Duplicate upload | Server returns the original job |
-| AI fails | Job marked failed, image deleted, ERROR reaches the plugin |
-| Photo unreadable | `RETAKE: <hint>` as the answer |
+| AI fails | Job marked failed, images deleted, ERROR reaches the plugin |
+| Every frame dark, blurry or glary | `retake` with a reason in about 1 s, no AI call. Lens (VISIBLE only) and camera LED both show it |
+| Model cannot read the frames | `Retake: <reason>` (too dark, blurry, page cut off, glare, too far, no text found) |
 | Plugin not polling | `glassesListening: false`, camera shows its LED pattern, result waits on the server |
 
 ## Data flow 2: Hidden mode

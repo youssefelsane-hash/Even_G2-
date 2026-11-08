@@ -2,6 +2,22 @@
 
 Study date: 2026-11-07. Nothing here has been tested on real hardware.
 
+> **Read this first (updated 2026-11-08).** This was the first study, written before anything was built. Parts of it
+> are now replaced:
+>
+> - **Camera choice and capture:** the camera is no longer ESP32-only or single-photo. See
+>   [CAMERA-HARDWARE-EGYPT.md](CAMERA-HARDWARE-EGYPT.md) (boards, prices, shopping lists) and
+>   [CAPTURE-STRATEGY.md](CAPTURE-STRATEGY.md) (burst, clip, multi-page, scoring, retakes, fusion prompt).
+> - **API:** the built contract is [API.md](API.md).
+> - **Spec:** [SPEC-V0.3.md](SPEC-V0.3.md) wins where it differs, for example no ntfy at all in V1 and the label set.
+> - **Built:** the backend (`backend/`), the Linux camera client (`camera/linux`), ESP32 firmware (`camera/esp32`,
+>   never compiled) and the glasses app. The four Study Lens faults listed here (ntfy bypasses Hidden, images never
+>   deleted, idempotency race, results drawn at cold start) are fixed in the new code; Study Lens itself is unchanged.
+>
+> Still current here: connectivity (sections 4-6), Hidden mode reasoning (section 7), latency budget (section 8,
+> ESTIMATE), security and retention (section 9), German recording rules (section 11) and the experiments (section 13).
+> Statements below that the newer documents replace are marked "(superseded)".
+
 Claim labels used in this document:
 
 - **VERIFIED**: read in a source listed at the end, shown as [S1], [S2], and so on.
@@ -16,7 +32,7 @@ and automated tests, and its firmware has never been flashed to a board [S1].
 
 ## 1. Recommendation
 
-1. **Camera: Seeed XIAO ESP32-S3 Sense, reusing the Study Lens firmware with changes.** It is
+1. **(superseded: see CAMERA-HARDWARE-EGYPT.md)** **Camera: Seeed XIAO ESP32-S3 Sense, reusing the Study Lens firmware with changes.** It is
    the smallest board found that has camera, Wi-Fi, BLE, battery charging and 8 MB PSRAM
    together [S2]. Add a 300-500 mAh LiPo, an outward-facing LED, a shutter button and a real
    power switch.
@@ -34,7 +50,7 @@ and automated tests, and its firmware has never been flashed to a board [S1].
    to the lens by default.** Whether it survives a locked phone is unknown, and it is the same
    question as the gesture engine (risk 2). Run C1 first. If C1 fails, no choice in this
    document rescues the product as specified, and section 6 lists the options.
-6. **Hidden mode: the ntfy fallback must not reach the lens by default.** Turn ntfy forwarding
+6. **(superseded: V1 has no ntfy at all, SPEC section 10)** **Hidden mode: the ntfy fallback must not reach the lens by default.** Turn ntfy forwarding
    off in the Even app, so the phone only buzzes. A lens fallback exists as a later opt-in, and
    only when the last known state is VISIBLE (section 7). Study Lens's fallback logic as
    written would break Hidden mode in three separate ways.
@@ -62,6 +78,8 @@ capture for AI (all ESTIMATE, section 3).
 Sensor warning: the Sense has shipped with OV2640, OV3660 and OV5640. Seeed's page says the
 current module is OV5640 with autofocus, that boards may ship with either OV5640 or OV3660, and
 that OV2640 is discontinued [S2]. VERIFIED. An add-on OV5640 module is sold separately [S9].
+Several retailers still say OV2640 or OV3660 may ship (re-checked 2026-11-08, CAMERA-HARDWARE-EGYPT.md [E31]), so
+ask the seller.
 The firmware's autofocus path has never been compiled [S1]. VERIFIED. Autofocus may matter a
 lot for reading a page at 25-40 cm (EXPERIMENT NEEDED, C7).
 
@@ -331,9 +349,10 @@ board and would be inside an enclosure. This is not enough. Change to:
 - Enclosure must not allow the LED to be covered without covering the lens. Place them side by side.
 - Must be visible from 2 m in daylight (C10).
 
-**Features that must not exist:** video, timed or interval capture, remote trigger from phone or
-glasses, audio recording. The Sense has a microphone [S2], and firmware must never initialise it.
-Photos are taken only by a physical press on the camera. Capture during Hidden mode still lights the
+**Features that must not exist:** sending or keeping video, timed or interval capture, remote trigger from phone
+or glasses, audio recording. The Sense has a microphone [S2], and firmware must never initialise it.
+Photos are taken only by a physical press on the camera. (Updated: a long press on a Linux camera scans about 2 s
+of frames locally and keeps up to 3 photos; nothing else leaves the device. CAPTURE-STRATEGY.md.) Capture during Hidden mode still lights the
 LED. Hidden hides the user's display. It does not hide the camera from other people.
 
 Not designed for exams or tests. There is no exam mode, and this should not be used where recording
@@ -346,16 +365,16 @@ Study Lens never deletes anything: images and job files stay on disk forever (no
 
 | Data | Kept where | Kept how long |
 | --- | --- | --- |
-| JPEG on camera | PSRAM only | Until uploaded or dropped. Never flash or SD |
+| JPEG on camera | PSRAM (ESP32) or the RAM disk under `/run` (Linux) | Until uploaded or dropped. Never flash or SD |
 | JPEG on backend | Encrypted disk (ASSUMPTION: server setup) | Deleted when the job reaches `done` or `failed`. Hard limit 1 hour |
 | Debug copy | Off by default | Opt-in per session, 24 h limit |
 | Result text | Backend | 30 days, then deleted. Includes transcribed page text, so treat as private |
 | Job stub (ID, key, timings) | Backend | 7 days, needed for idempotency and tests |
-| Result text on phone | Plugin storage | Last 20 results. The spec and the prototype keep only the last one |
+| Result text on phone | Plugin storage | Last 20 results (built, `app/src/core/inbox.ts`) |
 | AI provider | Anthropic | Up to 30 days under the standard commercial API terms, longer if flagged for a policy violation; zero data retention needs an agreement [S26]. Anthropic's two pages are not worded the same, so re-check before relying on this |
 
-Logs contain IDs and timings only, never answer text. ntfy carries only the fixed "Assistant paused"
-text by default. Public `ntfy.sh` topics are readable by anyone with the name [S1], so self-host ntfy on
+Logs contain IDs and timings only, never answer text. (Superseded: V1 deploys no ntfy.) ntfy carries only the fixed
+"Assistant paused" text by default. Public `ntfy.sh` topics are readable by anyone with the name [S1], so self-host ntfy on
 the same server if the lens fallback is ever enabled.
 
 ### Authentication
@@ -411,7 +430,9 @@ split it and rebuild the page on scroll events [S29], so this document assumes h
 (ASSUMPTION until risk 6 is closed). Detail therefore arrives pre-split into pages, and "exact scroll position"
 is a page index stored by the plugin.
 
-Replace the Study Lens `Solution` type with:
+(Superseded: the built schema adds `unreadableParts`, `frameConflicts` and a fixed list of retake reasons, and folds
+`CHECK FAILED` into `UNSURE`. See API.md and CAPTURE-STRATEGY.md section 8. The page index below became a line
+offset in SPEC-V0.3.) Replace the Study Lens `Solution` type with:
 
 ```json
 {
@@ -460,9 +481,9 @@ mark [S1]. Keep that test.
 `detail` items, with a page counter. Last page: `caveats`, then the question as read, so the user can spot a
 misread.
 
-**Model.** Keep `claude-opus-5-5`, adaptive thinking, effort set explicitly (Study Lens uses `medium`), and
-server-side fallback for refusals [S1][S11]. Provider stays behind the `SolveProvider` interface, so it can be
-changed by config.
+**Model.** Keep `claude-opus-5-5`, adaptive thinking, effort set explicitly (now `low`, CAPTURE-STRATEGY.md), and
+server-side fallback for refusals [S1][S11]. Provider stays behind an interface (built as `FusionProvider`), so it
+can be changed by config.
 
 ---
 
@@ -501,6 +522,10 @@ area is changing quickly.
 ---
 
 ## 12. Reuse from Study Lens
+
+(Done in software, 2026-11-08: the backend parts were ported and changed as listed; the firmware was rewritten as
+`camera/esp32` and the Linux client is new. `/v1/display-state` was not built, because V1 has no notification
+fallback. This table is the record of the plan.)
 
 **Reuse as is:**
 
@@ -545,7 +570,7 @@ Run in this order. C1 and C2 decide the project; the rest refine it.
 | C4 | Camera joins hotspot on the owner's phone: 2.4 GHz, WPA2/WPA3 modes | Joins in under 5 s | Change hotspot security, or build BLE companion |
 | C5 | Time from press to HTTP 202, connected and from deep sleep; measure real sleep current on the finished build | Under 6 s from sleep | Keep Wi-Fi awake for longer and accept battery loss |
 | C6 | Capture and upload on 150, 300 and 500 mAh cells at low charge | No brown-out in 50 captures | Use a larger cell |
-| C7 | 20 printed pages at 25-40 cm, small print: OV5640 autofocus against OV3660, hand-held and clipped | 18/20 legible to the AI | Larger sensor or a different device |
+| C7 | 20 printed pages at 25-40 cm, small print: OV5640 autofocus against OV3660, hand-held and clipped (now part of HT-19 and HT-23 for every board) | 18/20 legible to the AI | Board with autofocus (CAMERA-HARDWARE-EGYPT.md) |
 | C8 | Log IMU sample rate and glasses link during repeated uploads over the hotspot | Rate drops under 10 %, no missed gestures | Smaller images, or upload over BLE |
 | C9 | Study Lens's 50-capture run, extended with German text and real AI, recording each hop | 10/10 per condition, median under 15 s, no duplicates | Use levers in section 8 |
 | C10 | Stranger at 2 m in daylight and indoors reports whether the LED is obvious | Seen every time | Brighter LED, better placement |

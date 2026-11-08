@@ -1,4 +1,7 @@
+import manifest from '../app.json' with { type: 'json' };
 import type { Assistant } from './core/assistant.ts';
+import { RESOLUTIONS, clearBackendSettings, loadBackendSettings, saveBackendSettings, type CameraConfig, type CameraPatch, type JobEvent, type ResultClient, type SyncKV } from './core/backend.ts';
+import { EXAMPLE_TEXT, type ExampleLabel, type ExampleScore } from './core/personal.ts';
 import { STEP_TEXT } from './core/calibration.ts';
 import { SCENARIOS } from './core/scenarios.ts';
 import type { Settings } from './core/settings.ts';
@@ -7,6 +10,8 @@ import { sampleAnswer } from './sampleAnswer.ts';
 
 export interface PanelHost {
   assistant: Assistant;
+  client: ResultClient;
+  kv: SyncKV;
   previousLog: string | null;
   boots: number[];
   hasBridge: boolean;
@@ -29,7 +34,20 @@ const FIELDS: { key: keyof Settings; label: string; step: number }[] = [
   { key: 'smoothingMs', label: 'Smoothing (ms)', step: 10 },
   { key: 'shakeCooldownMs', label: 'Shake cooldown (ms)', step: 100 },
   { key: 'tiltCooldownMs', label: 'Tilt cooldown (ms)', step: 50 },
+  { key: 'shakeMaxPlateauMs', label: 'Longest rest at each side of a shake (ms)', step: 10 },
+  { key: 'undoHideMs', label: 'Undo an accidental hide with a double press within (ms, 0 = off)', step: 500 },
 ];
+
+/** Origins the Even app lets this plugin reach, from app.json. */
+export function whitelist(): string[] {
+  const perms = (manifest as { permissions?: { name: string; whitelist?: string[] }[] }).permissions ?? [];
+  return perms.filter((p) => p.name === 'network').flatMap((p) => p.whitelist ?? []);
+}
+
+const pct = (s: { hit: number; of: number }): string => `${s.hit}/${s.of}`;
+export function scoreText(s: ExampleScore): string {
+  return `shake ${pct(s.shake)}, tilt up ${pct(s.tiltUp)}, tilt down ${pct(s.tiltDown)}, ordinary movement that fired ${pct(s.otherFired)}`;
+}
 
 function saveFile(name: string, text: string, type: string): void {
   const a = document.createElement('a');
@@ -44,7 +62,7 @@ function saveFile(name: string, text: string, type: string): void {
 export function wearHelpHidden(s: { state: string }): boolean { return s.state !== 'REMOVED'; }
 
 export function initPanel(host: PanelHost): () => void {
-  const { assistant, now } = host;
+  const { assistant, client, now } = host;
   let playing = false;
 
   // Status
@@ -59,10 +77,18 @@ export function initPanel(host: PanelHost): () => void {
       `IMU: ${hz}  samples ${s.adapter.accepted}  gaps ${s.adapter.gaps}  batched ${s.adapter.batched}${s.sensorStale ? '  SENSOR LOST' : ''}`,
       `Tilt: ${s.engine.phase}  deviation ${dev}  shake suspect ${s.engine.shakeSuspect}`,
       `Line ${s.topLine + 1} of ${s.lineCount}  unseen result ${s.unseen}  last gesture ${s.lastGesture}  shakes ${s.shakes}`,
+      `Background ${s.engine.activity.label} (yaw ${s.engine.activity.yaw.toFixed(1)}, pitch ${s.engine.activity.pitch.toFixed(1)}, shake x${s.engine.activity.shakeBoost.toFixed(2)})  last shake reject ${s.engine.shakeReject}${s.undoAvailable ? '  undo available' : ''}`,
+      `Answers stored ${s.stored}, never shown ${s.unseenAnswers}  camera ${s.camera ? `${s.camera.stage} ${s.camera.photos} photos` : 'idle'}  presence ${s.presence}`,
       `Boots recorded: ${host.boots.length}`,
     ].join('\n');
     $('wearHelp').hidden = wearHelpHidden(s);
     $('logStatus').textContent = assistant.logger.recording ? `Recording: ${assistant.logger.length} rows` : `Stopped: ${assistant.logger.length} rows`;
+    const cfg = loadBackendSettings(host.kv);
+    $('backendStatus').textContent = cfg
+      ? `${cfg.serverUrl}: ${client.connState}${client.lastError && client.connState !== 'online' ? ` (${client.lastError})` : ''}  cursor ${client.cursor}  acks waiting ${client.pendingAcks}  polls ${client.polls}`
+      : 'Not set up. Answers come only from the fake buttons.';
+    const ex = s.examples;
+    $('exampleStatus').textContent = `${s.recordingExample ? `Recording ${s.recordingExample}: ${EXAMPLE_TEXT[s.recordingExample]} ` : ''}Examples: shake ${ex.shake}, tilt up ${ex.tiltUp}, tilt down ${ex.tiltDown}, ordinary ${ex.other}`;
   };
   setInterval(refresh, 500);
 
@@ -77,6 +103,75 @@ export function initPanel(host: PanelHost): () => void {
   click('aiResult', () => assistant.aiResult(sampleAnswer()));
   click('aiError', () => assistant.aiError('The photo could not be read. Take another one.'));
   click('touchPress', () => assistant.handleTouch('press'));
+
+  // Fake backend events, through the same entry point the real client uses.
+  let fakeJob = 0;
+  let fakeSeq = 0;
+  const job = (status: JobEvent['status'], extra: Partial<JobEvent> = {}) => void assistant.handleJobEvent({ jobId: `fake-job-${fakeJob}`, seq: ++fakeSeq, status, photos: 3, pages: 1, ...extra });
+  click('jobReceived', () => { fakeJob++; job('received'); });
+  click('jobProcessing', () => job('processing'));
+  click('jobReady', () => {
+    const a = sampleAnswer();
+    job('ready', { result: { short: a.short, detail: a.details.split('\n'), label: 'LIKELY', caveats: ['This is a fake answer from the phone panel.'], pages: 1, usedFrames: 2 } });
+  });
+  click('jobRetake', () => job('retake', { result: { short: '', detail: [], label: 'RETAKE', caveats: [], pages: 1, usedFrames: 0, retakeReason: 'too dark' } }));
+
+  // Backend connection. The token field is never filled back in.
+  const backendForm = $<HTMLFormElement>('backendForm');
+  const savedBackend = loadBackendSettings(host.kv);
+  if (savedBackend) $<HTMLInputElement>('serverUrl').value = savedBackend.serverUrl;
+  backendForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const serverUrl = $<HTMLInputElement>('serverUrl').value;
+    const typed = $<HTMLInputElement>('clientToken').value;
+    const token = typed || loadBackendSettings(host.kv)?.token || '';
+    const err = saveBackendSettings(host.kv, { serverUrl, token });
+    $<HTMLInputElement>('clientToken').value = '';
+    if (err) { $('backendMsg').textContent = err; return; }
+    const cfg = loadBackendSettings(host.kv)!;
+    const listed = whitelist().includes(cfg.serverUrl);
+    $('backendMsg').textContent = listed ? 'Saved. Connecting.' : `Saved, but ${cfg.serverUrl} is not in the app.json whitelist, so the Even app will block it. Add it and rebuild.`;
+    client.start(cfg);
+    refresh();
+  });
+  click('backendForget', () => {
+    clearBackendSettings(host.kv);
+    void client.stop().then(refresh);
+    $<HTMLInputElement>('serverUrl').value = '';
+    $('backendMsg').textContent = 'Forgotten. Polling stopped.';
+  });
+
+  // Camera settings, stored on the backend.
+  const resSelect = $<HTMLSelectElement>('camResolution');
+  for (const r of RESOLUTIONS) {
+    const o = document.createElement('option');
+    o.value = r;
+    o.textContent = r;
+    resSelect.append(o);
+  }
+  const fillCamera = (c: CameraConfig): void => {
+    $<HTMLSelectElement>('camDefaultMode').value = c.defaultMode;
+    $<HTMLInputElement>('camBurstFrames').value = String(c.burstFrames);
+    $<HTMLInputElement>('camUploadFrames').value = String(c.uploadFrames);
+    $<HTMLSelectElement>('camLongPress').value = c.longPressMode;
+    resSelect.value = c.resolution;
+  };
+  click('camLoad', () => {
+    $('camMsg').textContent = 'Loading...';
+    client.getCameraConfig().then((c) => { fillCamera(c); $('camMsg').textContent = `Loaded, version ${c.version ?? '?'}.`; }, (e: Error) => { $('camMsg').textContent = `Could not load: ${e.message}`; });
+  });
+  $<HTMLFormElement>('cameraForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const patch: CameraPatch = {
+      defaultMode: $<HTMLSelectElement>('camDefaultMode').value as CameraPatch['defaultMode'],
+      burstFrames: Number($<HTMLInputElement>('camBurstFrames').value),
+      uploadFrames: Number($<HTMLInputElement>('camUploadFrames').value),
+      longPressMode: $<HTMLSelectElement>('camLongPress').value as CameraPatch['longPressMode'],
+      resolution: resSelect.value as CameraPatch['resolution'],
+    };
+    $('camMsg').textContent = 'Saving...';
+    client.putCameraConfig(patch).then((c) => { fillCamera(c); $('camMsg').textContent = `Saved, version ${c.version ?? '?'}. The camera picks it up at its next wake.`; }, (err: Error) => { $('camMsg').textContent = `Not saved: ${err.message}`; });
+  });
 
   const motions = $('motions');
   for (const s of SCENARIOS) {
@@ -113,6 +208,7 @@ export function initPanel(host: PanelHost): () => void {
     for (const [key, input] of inputs) input.value = String(s[key]);
     $<HTMLInputElement>('tiltEnabled').checked = s.tiltEnabled;
     $<HTMLInputElement>('trustWear').checked = s.trustWearSensor;
+    $<HTMLInputElement>('activityAware').checked = s.activityAware;
     $<HTMLTextAreaElement>('advanced').value = JSON.stringify(s, null, 1);
   };
   form.addEventListener('submit', (e) => {
@@ -121,6 +217,7 @@ export function initPanel(host: PanelHost): () => void {
     for (const [key, input] of inputs) patch[key] = Number(input.value);
     patch.tiltEnabled = $<HTMLInputElement>('tiltEnabled').checked;
     patch.trustWearSensor = $<HTMLInputElement>('trustWear').checked;
+    patch.activityAware = $<HTMLInputElement>('activityAware').checked;
     void assistant.updateSettings(patch as Partial<Settings>).then(() => {
       fillSettings();
       $('settingsSaved').textContent = 'Saved';
@@ -160,6 +257,35 @@ export function initPanel(host: PanelHost): () => void {
   click('calAccept', () => void assistant.finishCalibration(true).then(() => { fillSettings(); showWizard(STEP_TEXT.done); }));
   click('calCancel', () => void assistant.finishCalibration(false).then(() => showWizard(STEP_TEXT.cancelled)));
   showWizard();
+
+  // Personal calibration
+  for (const b of document.querySelectorAll<HTMLButtonElement>('[data-example]')) {
+    b.addEventListener('click', () => { assistant.startExample(b.dataset.example as ExampleLabel); refresh(); });
+  }
+  click('exampleStop', () => {
+    const ok = assistant.stopExample();
+    $('personalOut').textContent = ok ? 'Example kept.' : 'Too short, not kept.';
+    refresh();
+  });
+  let personal: ReturnType<Assistant['analysePersonal']> | null = null;
+  click('personalAnalyse', () => {
+    personal = assistant.analysePersonal();
+    const p = personal;
+    $('personalAccept').hidden = !p.ok;
+    $('personalOut').textContent = !p.ok
+      ? p.error ?? 'Could not propose thresholds.'
+      : [
+        `Current settings on your examples: ${scoreText(p.before)}`,
+        `Proposal on your examples: ${p.after ? scoreText(p.after) : 'n/a'}`,
+        `Shake swing at least ${p.proposal!.shakeMinAmpDeg.toFixed(1)}, tilt up ${p.proposal!.tiltUpDeg.toFixed(1)}, tilt down ${p.proposal!.tiltDownDeg.toFixed(1)}, entry within ${p.proposal!.tiltEntryMaxMs.toFixed(0)} ms`,
+        ...p.warnings,
+      ].join('\n');
+  });
+  click('personalAccept', () => {
+    if (!personal?.ok || !personal.proposal) return;
+    void assistant.updateSettings(personal.proposal).then(() => { fillSettings(); $('personalOut').textContent = 'Saved.'; $('personalAccept').hidden = true; });
+  });
+  click('personalClear', () => { assistant.examples.clear(); $('personalOut').textContent = 'Examples cleared.'; refresh(); });
 
   // Raw logger
   const log = assistant.logger;
