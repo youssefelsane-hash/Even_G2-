@@ -46,13 +46,19 @@ export class GlassesPort implements DisplayPort {
     return this.rebuild(BLANK_TEXT).catch(() => false);
   }
 
-  setText(content: string): Promise<boolean> {
-    return this.lane.run(() => this.bridge.textContainerUpgrade(new TextContainerUpgrade({
-      containerID: MAIN.id, containerName: MAIN.name, contentOffset: 0, contentLength: 0, content,
-    })), true);
+  setText(content: string, stillWanted: () => boolean): Promise<boolean> {
+    return this.lane.run(async () => {
+      if (!stillWanted()) return false;
+      return this.bridge.textContainerUpgrade(new TextContainerUpgrade({
+        containerID: MAIN.id, containerName: MAIN.name, contentOffset: 0, contentLength: 0, content,
+      }));
+    }, true);
   }
 
-  rebuild(content: string): Promise<boolean> {
-    return this.lane.run(() => this.bridge.rebuildPageContainer(new RebuildPageContainer(layout(content))), true);
+  rebuild(content: string, stillWanted: () => boolean = () => true): Promise<boolean> {
+    return this.lane.run(async () => {
+      if (!stillWanted()) return false;
+      return this.bridge.rebuildPageContainer(new RebuildPageContainer(layout(content)));
+    }, true);
   }
 }

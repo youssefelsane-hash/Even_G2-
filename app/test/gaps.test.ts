@@ -7,7 +7,7 @@ import { countGestures } from '../src/core/scenarios.ts';
 import { sanitizeSettings } from '../src/core/settings.ts';
 import { ShakeDetector } from '../src/core/shakeDetector.ts';
 import { nod, sequence, shake, still, stream, tilt, together, type Motion } from '../src/core/synth.ts';
-import { Rig } from './helpers.ts';
+import { recordCalibration, Rig } from './helpers.ts';
 
 const base = sanitizeSettings({});
 const answer = { id: 'q', short: 'Short', details: Array.from({ length: 40 }, (_, i) => `Line ${i}`).join('\n') };
@@ -168,15 +168,11 @@ test('an error screen stays until pressed: scrolling does not clear it or move t
 test('the wizard measures gyro bias from the neutral step', () => {
   const hw = sanitizeSettings({ imuMode: 'rate', pitchAxis: 'y', yawAxis: 'z' });
   const w = new CalibrationWizard(sanitizeSettings({}));
-  const feed = (m: Motion, startT: number) => { for (const s of stream(m, { settings: hw, startT, seed: 9, rateBias: 2 })) w.push(s); };
-  feed(still(1500), 0);
-  w.next();
-  feed(tilt(25, { rampMs: 300, holdMs: 1500, backMs: 1 }), 2000);
-  w.next();
-  feed(tilt(-27, { rampMs: 300, holdMs: 1500, backMs: 1 }), 4000);
-  w.next();
-  feed(shake({ ampDeg: 24, hz: 2, cycles: 3 }), 6000);
-  assert.equal(w.next().ok, true);
+  const options = { settings: hw, seed: 9, rateBias: 2 };
+  recordCalibration(w, still(1500), options);
+  recordCalibration(w, tilt(25, { rampMs: 300, holdMs: 1500, backMs: 1 }), options);
+  recordCalibration(w, tilt(-27, { rampMs: 300, holdMs: 1500, backMs: 1 }), options);
+  assert.equal(recordCalibration(w, shake({ ampDeg: 24, hz: 2, cycles: 3 }), options).ok, true);
   const p = w.proposal()!;
   assert.ok(Math.abs(p.rateBiasPitch / (2 * p.imuScale) - 1) < 0.2, `pitch bias ${p.rateBiasPitch}, scale ${p.imuScale}`);
   assert.ok(Math.abs(p.rateBiasYaw / (2 * p.imuScale) - 1) < 0.2, `yaw bias ${p.rateBiasYaw}`);

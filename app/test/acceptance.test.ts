@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { scenario } from '../src/core/scenarios.ts';
 import { MemoryStore } from '../src/core/storage.ts';
-import { lookSide, nod, sequence, shake, still, talking, tilt, together, walking } from '../src/core/synth.ts';
+import { lookSide, nod, sequence, shake, still, stream, talking, tilt, together, walking } from '../src/core/synth.ts';
 import { Rig } from './helpers.ts';
 
 const answer = (id = 'q1') => ({
@@ -267,10 +267,15 @@ test('recovery: two double presses count, and one or two presses do not', async 
   assert.equal(r.exits, 0, 'recovery must not open the exit dialog');
 });
 
-test('recovery works with unknown wear, so a silent wear sensor cannot trap the app', async () => {
+test('touch cannot reveal before the host reports the glasses worn', async () => {
   const r = await new Rig().start();
   r.a.handleConnection(true);
   for (let i = 0; i < 4; i++) r.a.handleTouch('press');
+  assert.equal(r.a.state, 'HIDDEN');
+  r.a.handleWear(true);
+  for (let i = 0; i < 3; i++) r.a.handleTouch('press');
+  assert.equal(r.a.state, 'HIDDEN');
+  r.a.handleTouch('press');
   assert.equal(r.a.state, 'VISIBLE');
 });
 
@@ -295,12 +300,50 @@ test('presses made before a removal do not count after re-wear', async () => {
   assert.equal(r.a.state, 'HIDDEN');
 });
 
-test('presses during the settle time are ignored', async () => {
+test('touch unlock is available as soon as the glasses report worn', async () => {
   const r = await new Rig().start();
   r.a.handleConnection(true);
   r.a.handleWear(true);
-  for (let i = 0; i < 6; i++) r.a.handleTouch('press');
+  for (let i = 0; i < 4; i++) r.a.handleTouch('press');
+  assert.equal(r.a.state, 'VISIBLE');
+});
+
+for (const unlockGesture of ['touch', 'shake'] as const) {
+  test(`ordinary head angles and diagonal glances leave the locked lens blank in ${unlockGesture} mode`, async () => {
+    const r = await new Rig(undefined, { initialSettings: { unlockGesture, tiltEnabled: true } }).ready();
+    r.a.aiResult(answer());
+    const mark = r.markPlans();
+    const angles = [-45, -30, -15, 15, 30, 45];
+    for (const angle of angles) {
+      const pitch = tilt(angle, { rampMs: 600, holdMs: 850 });
+      const yaw = lookSide({ deg: angle, turnMs: 600, holdMs: 850 });
+      const otherYaw = lookSide({ deg: -angle, turnMs: 600, holdMs: 850 });
+      for (const motion of [pitch, yaw, together(pitch, yaw), together(pitch, otherYaw)]) {
+        const pose = sequence(motion, still(450));
+        r.feed(stream(pose, { hz: 10, jitterMs: 8, settings: r.a.settings }));
+        r.play(pose);
+        assert.equal(r.a.plan().kind, 'blank', `ordinary movement at ${angle}°`);
+      }
+    }
+    if (unlockGesture === 'touch') {
+      r.play(shake());
+      assert.equal(r.a.plan().kind, 'blank');
+    }
+    assert.ok(r.plansSince(mark).every((p) => p.kind === 'blank'));
+    assert.equal(r.a.snapshot().topLine, 0);
+  });
+}
+
+test('changing the touch count requires a fresh sequence with that count', async () => {
+  const r = await new Rig(undefined, { initialSettings: { unlockGesture: 'touch', recoveryPresses: 4 } }).ready();
+  r.a.handleTouch('double');
+  await r.a.updateSettings({ recoveryPresses: 3 });
+  r.a.handleTouch('press');
   assert.equal(r.a.state, 'HIDDEN');
+  r.a.handleTouch('press');
+  assert.equal(r.a.state, 'HIDDEN');
+  r.a.handleTouch('press');
+  assert.equal(r.a.state, 'VISIBLE');
 });
 
 test('a wear sensor stuck on removed is escaped only by a deliberate phone setting', async () => {
@@ -325,8 +368,10 @@ test('gestures do nothing until wear is known', async () => {
   assert.equal(r.a.snapshot().shakes, 0);
 });
 
-test('touch scrolling still works after recovery with no wear data', async () => {
+test('touch scrolling works after unlocking with the motion sensor idle', async () => {
   const r = await new Rig().start();
+  r.a.handleConnection(true);
+  r.a.handleWear(true);
   r.a.aiResult(answer());
   for (let i = 0; i < 4; i++) r.a.handleTouch('press');
   r.a.handleTouch('swipeDown');

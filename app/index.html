@@ -8,34 +8,110 @@
   <body>
     <main>
       <h1>G2 Assistant</h1>
+      <p id="revision" class="meta"></p>
       <p class="state" id="state" data-state="HIDDEN">HIDDEN</p>
+      <button id="lockDisplay" type="button" hidden>Lock display</button>
+      <p id="unlockHint" hidden></p>
+      <p id="tapStatus" class="meta" hidden></p>
       <pre id="detail" class="meta"></pre>
       <p id="wearHelp" class="warn" hidden>
-        The glasses report as not worn. If they are on your head, the wear value may not be reaching the app:
-        turn off "Trust the wear sensor" in Settings. Automatic hiding on removal stops while it is off.
+        If you're wearing the glasses, check that Wear Detection is on in Even Realities → My Devices.
       </p>
       <p class="meta">This page never shows answer text, so it cannot leak what Hidden mode hides.</p>
 
-      <details open>
-        <summary>Simulator tools</summary>
-        <p class="meta">The simulator sends no IMU or wear events. These buttons inject them through the same code paths.</p>
-        <h2>Wear and connection</h2>
+      <details id="wearCheck">
+        <summary>Check removal sensor</summary>
+        <p>This checks which wear reports reach this plug-in. Keep Wear Detection enabled, start while wearing the glasses, then follow the steps below with both arms open.</p>
+        <p id="wearCheckStatus" role="status"></p>
+        <p id="wearReport" class="meta"></p>
         <div class="row">
-          <button id="wearOn" type="button">Worn</button>
-          <button id="wearOff" type="button">Removed</button>
-          <button id="wearUnknown" type="button">Unknown</button>
-          <button id="connOff" type="button">Disconnect</button>
-          <button id="connOn" type="button">Reconnect</button>
+          <button id="wearCheckStart" type="button">Test wear sensor</button>
+          <button id="wearCheckCancel" type="button" hidden>Stop test</button>
         </div>
-        <h2>Motion</h2>
-        <div class="row" id="motions"></div>
-        <p class="meta" id="motionStatus">Idle</p>
+      </details>
+
+      <details>
+        <summary>Settings</summary>
+        <form id="settings" autocomplete="off">
+          <label>Unlock with
+            <select id="unlockGesture">
+              <option value="touch">Glasses touchpad</option>
+              <option value="shake">Head shake</option>
+              <option value="either">Touchpad or head shake</option>
+            </select>
+          </label>
+          <label id="unlockTouchpadField">Touchpad side
+            <select id="unlockTouchpad">
+              <option value="either">Either side</option>
+              <option value="left">Left side</option>
+              <option value="right">Right side</option>
+            </select>
+          </label>
+          <label id="unlockTapsField">Touches to unlock
+            <input id="unlockTaps" type="number" min="3" max="10" step="1" required />
+          </label>
+          <label class="check"><input id="trustWear" type="checkbox" /> Use the glasses' wear sensor</label>
+          <label class="check"><input id="tiltEnabled" type="checkbox" /> Tilt to scroll</label>
+          <details>
+            <summary>Advanced gesture and wear settings</summary>
+            <div id="settingsEnd"></div>
+            <p class="meta">With this off, motion estimates wear. This can miss a quick removal.</p>
+            <label class="check"><input id="activityAware" type="checkbox" /> Ask for clearer gestures while walking or talking</label>
+          </details>
+          <button type="submit">Save</button>
+          <span id="settingsSaved" class="meta" role="status"></span>
+        </form>
+        <details>
+          <summary>Advanced JSON</summary>
+          <textarea id="advanced" rows="12" spellcheck="false"></textarea>
+          <button id="saveAdvanced" type="button">Save JSON</button>
+        </details>
+      </details>
+
+      <details id="calibration">
+        <summary>Calibration</summary>
+        <div class="calibration-step">
+          <p id="calTitle" class="calibration-title" hidden></p>
+          <p id="calText">Set up tilt to scroll and shake to hide or show.</p>
+          <div id="calTimer" class="calibration-timer" role="timer" hidden></div>
+          <p id="calMessage" class="warn" role="status" hidden></p>
+          <div class="row">
+            <button id="calStart" class="calibration-primary" type="button">Start calibration</button>
+            <button id="calCapture" class="calibration-primary" type="button" hidden>I'm ready</button>
+            <button id="calAccept" class="calibration-primary" type="button" hidden>Save gestures</button>
+            <button id="calCancel" type="button" hidden>Cancel</button>
+            <button id="calRetryUp" type="button" hidden>Redo tilt up</button>
+            <button id="calRestartImu" type="button" hidden>Restart motion sensor</button>
+          </div>
+          <details id="calMeasurements" hidden>
+            <summary>Measurements</summary>
+            <pre id="calProposal" class="meta"></pre>
+          </details>
+        </div>
+      </details>
+
+      <details>
+        <summary>Simulator tools</summary>
+        <div id="simulatedInput" hidden>
+          <p class="meta">These controls simulate input when testing without glasses.</p>
+          <h2>Wear and connection</h2>
+          <div class="row">
+            <button id="wearOn" type="button">Worn</button>
+            <button id="wearOff" type="button">Removed</button>
+            <button id="wearUnknown" type="button">Unknown</button>
+            <button id="connOff" type="button">Disconnect</button>
+            <button id="connOn" type="button">Reconnect</button>
+          </div>
+          <h2>Motion</h2>
+          <div class="row" id="motions"></div>
+          <p class="meta" id="motionStatus">Idle</p>
+        </div>
         <h2>Fake AI</h2>
         <div class="row">
           <button id="aiStart" type="button">Photo sent</button>
           <button id="aiResult" type="button">Answer arrives</button>
           <button id="aiError" type="button">AI error</button>
-          <button id="touchPress" type="button">Touch press</button>
+          <button id="touchPress" type="button" hidden>Touch press</button>
         </div>
         <h2>Fake camera job (same path as backend events)</h2>
         <div class="row">
@@ -80,35 +156,6 @@
           </div>
           <p id="camMsg" class="meta"></p>
         </form>
-      </details>
-
-      <details>
-        <summary>Settings</summary>
-        <form id="settings" autocomplete="off">
-          <div id="settingsEnd"></div>
-          <label class="check"><input id="tiltEnabled" type="checkbox" /> Tilt to scroll</label>
-          <label class="check"><input id="trustWear" type="checkbox" /> Trust the wear sensor</label>
-          <label class="check"><input id="activityAware" type="checkbox" /> Ask for clearer gestures while walking or talking</label>
-          <button type="submit">Save</button>
-          <span id="settingsSaved" class="meta"></span>
-        </form>
-        <details>
-          <summary>Advanced JSON</summary>
-          <textarea id="advanced" rows="12" spellcheck="false"></textarea>
-          <button id="saveAdvanced" type="button">Save JSON</button>
-        </details>
-      </details>
-
-      <details>
-        <summary>Calibration</summary>
-        <p id="calText"></p>
-        <pre id="calProposal" class="meta"></pre>
-        <div class="row">
-          <button id="calStart" type="button">Start</button>
-          <button id="calNext" type="button" hidden>Next</button>
-          <button id="calAccept" type="button" hidden>Accept</button>
-          <button id="calCancel" type="button" hidden>Cancel</button>
-        </div>
       </details>
 
       <details>

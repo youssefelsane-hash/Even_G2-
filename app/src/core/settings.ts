@@ -3,6 +3,8 @@
 // the real unit of the IMU values is not documented (see app/README.md).
 export type Axis = 'x' | 'y' | 'z';
 export type ImuMode = 'orientation' | 'rate';
+export type UnlockGesture = 'touch' | 'shake' | 'either';
+export type UnlockTouchpad = 'either' | 'left' | 'right';
 
 export interface Settings {
   // IMU adapter
@@ -12,6 +14,8 @@ export interface Settings {
   pitchSign: 1 | -1;
   yawSign: 1 | -1;
   imuScale: number;
+  /** The x/y/z values are gravity (an accelerometer, as on the real G2): turn each axis into its true tilt angle in degrees first. */
+  gravityAngles: boolean;
   rateBiasPitch: number;
   rateBiasYaw: number;
   wrapPeriod: number;
@@ -26,6 +30,8 @@ export interface Settings {
   driftTauMs: number;
   driftWindowDeg: number;
   smoothingMs: number;
+  /** Standard deviation of pitch while still, measured by calibration. 0 = not measured. */
+  sensorNoiseDeg: number;
   // Tilt to scroll
   tiltEnabled: boolean;
   deadZoneDeg: number;
@@ -38,6 +44,8 @@ export interface Settings {
   tiltMaxHoldMs: number;
   tiltCooldownMs: number;
   scrollLinesPerSec: number;
+  /** Scroll speed at the deepest allowed tilt. A small tilt reads slowly, a deeper one skims. */
+  scrollMaxLinesPerSec: number;
   // Shake to hide or show
   shakeSensitivity: number;
   shakeSwings: number;
@@ -69,7 +77,13 @@ export interface Settings {
   /** After a shake hides the lens, a double press within this time undoes it. 0 turns it off. */
   undoHideMs: number;
   // Wear and recovery
+  unlockGesture: UnlockGesture;
+  unlockTouchpad: UnlockTouchpad;
   trustWearSensor: boolean;
+  /** With the wear sensor distrusted, tell removal from motion: still this long means off the head. */
+  motionWearOffMs: number;
+  /** Largest pitch or yaw range that still counts as lying still, before the noise floor. */
+  motionWearStillDeg: number;
   wearSettleMs: number;
   recoveryPresses: number;
   recoveryWindowMs: number;
@@ -85,6 +99,7 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   pitchSign: 1,
   yawSign: 1,
   imuScale: 1,
+  gravityAngles: false,
   rateBiasPitch: 0,
   rateBiasYaw: 0,
   wrapPeriod: 360,
@@ -99,6 +114,7 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   driftTauMs: 60_000,
   driftWindowDeg: 12,
   smoothingMs: 60,
+  sensorNoiseDeg: 0,
 
   tiltEnabled: true,
   deadZoneDeg: 6,
@@ -110,7 +126,8 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   tiltMinDurationMs: 350,
   tiltMaxHoldMs: 6000,
   tiltCooldownMs: 300,
-  scrollLinesPerSec: 3,
+  scrollLinesPerSec: 2.5,
+  scrollMaxLinesPerSec: 7,
 
   shakeSensitivity: 1,
   shakeSwings: 3,
@@ -139,9 +156,13 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   activityTiltBoostDeg: 6,
   undoHideMs: 4000,
 
+  unlockGesture: 'touch',
+  unlockTouchpad: 'either',
   trustWearSensor: true,
+  motionWearOffMs: 45_000,
+  motionWearStillDeg: 1,
   wearSettleMs: 1500,
-  recoveryPresses: 4,
+  recoveryPresses: 3,
   recoveryWindowMs: 3000,
   sensorStaleMs: 3000,
 });
@@ -162,6 +183,7 @@ const RANGES: Record<NumberKey, [number, number]> = {
   driftTauMs: [1000, 3_600_000],
   driftWindowDeg: [1, 45],
   smoothingMs: [0, 1000],
+  sensorNoiseDeg: [0, 10],
   deadZoneDeg: [0.5, 40],
   tiltUpDeg: [1, 80],
   tiltDownDeg: [1, 80],
@@ -172,6 +194,7 @@ const RANGES: Record<NumberKey, [number, number]> = {
   tiltMaxHoldMs: [500, 120_000],
   tiltCooldownMs: [0, 10_000],
   scrollLinesPerSec: [0.2, 30],
+  scrollMaxLinesPerSec: [0.2, 30],
   shakeSensitivity: [0.25, 4],
   shakeSwings: [2, 8],
   shakeMinAmpDeg: [1, 120],
@@ -197,6 +220,8 @@ const RANGES: Record<NumberKey, [number, number]> = {
   activityTiltBoostDeg: [0, 30],
   undoHideMs: [0, 30_000],
   wearSettleMs: [0, 30_000],
+  motionWearOffMs: [5000, 600_000],
+  motionWearStillDeg: [0.1, 10],
   recoveryPresses: [3, 10],
   recoveryWindowMs: [500, 20_000],
   sensorStaleMs: [500, 60_000],
@@ -207,6 +232,8 @@ const MIN_PRESS_MS = 400;
 
 const isAxis = (v: unknown): v is Axis => v === 'x' || v === 'y' || v === 'z';
 const isSign = (v: unknown): v is 1 | -1 => v === 1 || v === -1;
+export const isUnlockGesture = (v: unknown): v is UnlockGesture => v === 'touch' || v === 'shake' || v === 'either';
+export const isUnlockTouchpad = (v: unknown): v is UnlockTouchpad => v === 'either' || v === 'left' || v === 'right';
 
 // Accepts anything (stored JSON may be old or corrupt) and always returns a
 // complete, safe Settings object. Bad fields fall back to `base`. Values that
@@ -226,7 +253,10 @@ export function sanitizeSettings(input: unknown, base: Readonly<Settings> = DEFA
   if (isAxis(src.yawAxis)) out.yawAxis = src.yawAxis;
   if (isSign(src.pitchSign)) out.pitchSign = src.pitchSign;
   if (isSign(src.yawSign)) out.yawSign = src.yawSign;
+  if (isUnlockGesture(src.unlockGesture)) out.unlockGesture = src.unlockGesture;
+  if (isUnlockTouchpad(src.unlockTouchpad)) out.unlockTouchpad = src.unlockTouchpad;
   if (typeof src.tiltEnabled === 'boolean') out.tiltEnabled = src.tiltEnabled;
+  if (typeof src.gravityAngles === 'boolean') out.gravityAngles = src.gravityAngles;
   if (typeof src.trustWearSensor === 'boolean') out.trustWearSensor = src.trustWearSensor;
   if (typeof src.activityAware === 'boolean') out.activityAware = src.activityAware;
   if (src.neutralPitch === null) out.neutralPitch = null;
@@ -251,6 +281,7 @@ export function sanitizeSettings(input: unknown, base: Readonly<Settings> = DEFA
   out.shakeMaxSwingMs = Math.max(out.shakeMaxSwingMs, out.shakeMinSwingMs + 1);
   out.shakeMaxTotalMs = Math.max(out.shakeMaxTotalMs, Math.ceil(out.shakeSwings * out.shakeMinSwingMs * 1.5));
   out.shakeMinRateDps = Math.min(out.shakeMinRateDps, (0.5 * out.shakeSensitivity * out.shakeMaxAmpDeg * 1000) / Math.max(out.shakeMinSwingMs, 1));
+  out.scrollMaxLinesPerSec = Math.max(out.scrollMaxLinesPerSec, out.scrollLinesPerSec);
   out.activityFullDeg = Math.max(out.activityFullDeg, out.activityQuietDeg + 0.5);
   // Keep touch recovery reachable by a person.
   out.recoveryWindowMs = Math.max(out.recoveryWindowMs, out.recoveryPresses * MIN_PRESS_MS);

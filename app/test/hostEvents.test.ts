@@ -3,13 +3,15 @@ import assert from 'node:assert/strict';
 import { mapHostEvent } from '../src/hostEvents.ts';
 
 test('swipes come from textEvent', () => {
-  assert.deepEqual(mapHostEvent({ textEvent: { eventType: 1 } }), { kind: 'touch', touch: 'swipeUp' });
-  assert.deepEqual(mapHostEvent({ textEvent: { eventType: 2 } }), { kind: 'touch', touch: 'swipeDown' });
+  assert.deepEqual(mapHostEvent({ textEvent: { eventType: 1 } }), { kind: 'touch', touch: 'swipeUp', source: 'unknown' });
+  assert.deepEqual(mapHostEvent({ textEvent: { eventType: 2 } }), { kind: 'touch', touch: 'swipeDown', source: 'unknown' });
+  assert.deepEqual(mapHostEvent({ sysEvent: { eventType: 2, eventSource: 3 } }), { kind: 'touch', touch: 'swipeDown', source: 'left' });
 });
 
 test('a press has no eventType because protobuf drops zero', () => {
-  assert.deepEqual(mapHostEvent({ sysEvent: {} }), { kind: 'touch', touch: 'press' });
-  assert.deepEqual(mapHostEvent({ sysEvent: { eventType: 3 } }), { kind: 'touch', touch: 'double' });
+  assert.deepEqual(mapHostEvent({ sysEvent: {} }), { kind: 'touch', touch: 'press', source: 'unknown' });
+  assert.deepEqual(mapHostEvent({ sysEvent: { eventType: 3, eventSource: 1 } }), { kind: 'touch', touch: 'double', source: 'right' });
+  assert.deepEqual(mapHostEvent({ textEvent: { eventType: 3 } }), { kind: 'touch', touch: 'double', source: 'unknown' });
 });
 
 test('IMU, lifecycle and unknown events', () => {
@@ -40,6 +42,17 @@ test('the numbers match the installed SDK, and its parser feeds this mapping', a
   );
   const parsed = sdk.evenHubEventFromJson({ type: 'sysEvent', jsonData: { eventType: 8, imuData: { x: 1, y: 0 } } });
   assert.deepEqual(mapHostEvent(parsed), { kind: 'imu', data: parsed.sysEvent?.imuData });
+  const S = sdk.EventSourceType;
+  const sources = [
+    [S.TOUCH_EVENT_FROM_GLASSES_R, 'right'], [S.TOUCH_EVENT_FROM_GLASSES_L, 'left'],
+    [S.TOUCH_EVENT_FROM_RING, 'ring'], [S.TOUCH_EVENT_FORM_DUMMY_NULL, 'unknown'],
+  ] as const;
+  for (const [eventSource, source] of sources) {
+    const press = sdk.evenHubEventFromJson({ type: 'sysEvent', jsonData: { eventSource } });
+    const double = sdk.evenHubEventFromJson({ type: 'sysEvent', jsonData: { eventType: E.DOUBLE_CLICK_EVENT, eventSource } });
+    assert.deepEqual(mapHostEvent(press), { kind: 'touch', touch: 'press', source });
+    assert.deepEqual(mapHostEvent(double), { kind: 'touch', touch: 'double', source });
+  }
   // Facts the wear and IMU handling depend on. If an SDK update changes these, revisit them.
   assert.equal(new sdk.DeviceStatus({ sn: 'a' }).isWearing, false, 'a missing isWearing becomes false');
   assert.equal(sdk.IMU_Report_Data.fromJson({ x: 1.5 }).y, undefined, 'a missing axis stays undefined');

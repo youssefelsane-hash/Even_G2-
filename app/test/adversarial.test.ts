@@ -9,7 +9,7 @@ import { DEFAULT_SETTINGS, sanitizeSettings } from '../src/core/settings.ts';
 import { MemoryStore, SESSION_KEY, SessionWriter, type Session } from '../src/core/storage.ts';
 import { sequence, shake, still, stream, tilt } from '../src/core/synth.ts';
 import { wearHelpHidden } from '../src/panel.ts';
-import { Rig } from './helpers.ts';
+import { recordCalibration, Rig } from './helpers.ts';
 
 const answer = (id = 'q1') => ({
   id,
@@ -30,14 +30,16 @@ async function visibleWithAnswer(): Promise<Rig> {
 
 // ---- Content on the lens when it must be dark ----
 
-test('a first "disconnected" status hides content revealed before any status arrived', async () => {
-  const r = await new Rig().start();
+test('a disconnect hides content until a fresh wear report and unlock', async () => {
+  const r = await new Rig().ready();
   for (let i = 0; i < 4; i++) r.a.handleTouch('press');
   assert.equal(r.a.state, 'VISIBLE');
   r.a.handleConnection(false);
   assert.equal(r.a.state, 'HIDDEN');
   assert.equal(r.lit(), false);
+  r.a.handleWear(true); // late report while disconnected
   r.a.handleConnection(true);
+  for (let i = 0; i < 4; i++) r.a.handleTouch('press');
   assert.equal(r.a.state, 'HIDDEN', 'a reconnect must not bring it back');
 });
 
@@ -241,16 +243,11 @@ test('calibrating does not raise a false "sensor lost"', async () => {
 
 test('non-finite samples are kept out of the calibration', () => {
   const w = new CalibrationWizard(sanitizeSettings({}));
-  for (const s of stream(still(1000))) w.push(s);
-  w.push({ x: Number.NaN, y: Number.NaN, z: Number.NaN, t: 1001 });
-  assert.equal(w.next().ok, true);
-  for (const s of stream(tilt(25, { rampMs: 300, holdMs: 1500, backMs: 1 }), { startT: 2000 })) w.push(s);
-  w.push({ x: Number.NaN, y: 0, z: 0, t: 4000 });
-  assert.equal(w.next().ok, true);
-  for (const s of stream(tilt(-27, { rampMs: 300, holdMs: 1500, backMs: 1 }), { startT: 4000 })) w.push(s);
-  assert.equal(w.next().ok, true);
-  for (const s of stream(shake({ ampDeg: 24, hz: 2, cycles: 3 }), { startT: 6000 })) w.push(s);
-  assert.equal(w.next().ok, true);
+  const invalid = [{ x: Number.NaN, y: 0, z: 0, t: 0 }];
+  assert.equal(recordCalibration(w, still(1000), {}, invalid).ok, true);
+  assert.equal(recordCalibration(w, tilt(25, { rampMs: 300, holdMs: 1500, backMs: 1 }), {}, invalid).ok, true);
+  assert.equal(recordCalibration(w, tilt(-27, { rampMs: 300, holdMs: 1500, backMs: 1 })).ok, true);
+  assert.equal(recordCalibration(w, shake({ ampDeg: 24, hz: 2, cycles: 3 })).ok, true);
   const p = w.proposal()!;
   assert.equal(p.pitchAxis, 'x');
   assert.ok(p.neutralPitch !== null && Number.isFinite(p.neutralPitch));
@@ -258,15 +255,11 @@ test('non-finite samples are kept out of the calibration', () => {
 
 function calibrate(base: ReturnType<typeof sanitizeSettings>, hw: ReturnType<typeof sanitizeSettings>) {
   const w = new CalibrationWizard(base);
-  const feed = (m: Parameters<typeof stream>[0], startT: number) => { for (const s of stream(m, { settings: hw, startT, seed: 9 })) w.push(s); };
-  feed(still(1500), 0);
-  w.next();
-  feed(tilt(25, { rampMs: 300, holdMs: 1500, backMs: 1 }), 2000);
-  w.next();
-  feed(tilt(-27, { rampMs: 300, holdMs: 1500, backMs: 1 }), 4000);
-  w.next();
-  feed(shake({ ampDeg: 24, hz: 2, cycles: 3 }), 6000);
-  assert.equal(w.next().ok, true);
+  const options = { settings: hw, seed: 9 };
+  recordCalibration(w, still(1500), options);
+  recordCalibration(w, tilt(25, { rampMs: 300, holdMs: 1500, backMs: 1 }), options);
+  recordCalibration(w, tilt(-27, { rampMs: 300, holdMs: 1500, backMs: 1 }), options);
+  assert.equal(recordCalibration(w, shake({ ampDeg: 24, hz: 2, cycles: 3 }), options).ok, true);
   return w.proposal()!;
 }
 

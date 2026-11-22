@@ -47,6 +47,104 @@ test('a hide during a slow update goes straight after it and nothing follows', a
   assert.equal(p.sent.length, 2);
 });
 
+test('blank timing includes the wait behind an in-progress update', async () => {
+  let now = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const q = new RenderQueue({
+    async setText(value) {
+      if (value === BLANK_TEXT) now += 15;
+      else await gate;
+      return true;
+    },
+    async rebuild() { assert.fail('the update is accepted'); },
+  }, 1000, () => now);
+  const pending = q.show(text('test'));
+  now = 25;
+  void q.show(BLANK);
+  now = 50;
+  void q.show(BLANK); // an unchanged periodic refresh does not reset the timer
+  release();
+  await pending;
+  assert.deepEqual(q.timings, { blankMs: 40, textMs: 50 });
+});
+
+test('removing the glasses cancels a text update still waiting to reach the bridge', async () => {
+  let ready!: () => void;
+  const gate = new Promise<void>((resolve) => { ready = resolve; });
+  const sent: string[] = [];
+  const q = new RenderQueue({
+    async setText(value, stillWanted) {
+      await gate;
+      if (!stillWanted()) return false;
+      sent.push(value);
+      return true;
+    },
+    async rebuild() { assert.fail('no stale text rebuild'); },
+  });
+  const done = q.show(text('answer'));
+  void q.show(BLANK, true);
+  ready();
+  await done;
+  assert.deepEqual(sent, [BLANK_TEXT]);
+});
+
+test('rapid removal, re-wear and unlock still blank the lens before the next answer', async () => {
+  const p = new FakePort();
+  let release!: () => void;
+  p.gate = new Promise((resolve) => { release = resolve; });
+  const q = new RenderQueue(p);
+  const done = q.show(text('previous line'));
+  void q.show(text('scroll update'));
+  void q.show(BLANK, true);
+  void q.show(BLANK, true);
+  void q.show(text('answer after unlock'));
+  release();
+  await done;
+  assert.deepEqual(p.sent, ['previous line', BLANK_TEXT, 'answer after unlock']);
+});
+
+test('a blank that fails to clear the lens holds back text until it succeeds', async () => {
+  const p = new FakePort();
+  const q = new RenderQueue(p);
+  await q.show(text('previous answer'));
+  p.ok = p.rebuildOk = false;
+  const done = q.show(BLANK, true);
+  void q.show(text('new answer'));
+  await done;
+  assert.deepEqual(p.sent, ['previous answer', BLANK_TEXT]);
+  assert.deepEqual(p.rebuilt, [BLANK_TEXT]);
+  assert.equal(q.status, 'unconfirmed');
+  p.ok = true;
+  await q.show(text('new answer'));
+  assert.deepEqual(p.sent, ['previous answer', BLANK_TEXT, BLANK_TEXT, 'new answer']);
+});
+
+test('an expired bridge command cannot send an old render after a fresh unlock', async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const sent: string[] = [];
+  let first = true;
+  const q = new RenderQueue({
+    async setText(t, stillWanted) {
+      const delayed = first;
+      first = false;
+      if (delayed) await gate;
+      if (!stillWanted()) return false;
+      sent.push(delayed ? `late ${t}` : t);
+      return true;
+    },
+    async rebuild() { assert.fail('no stale text rebuild'); },
+  }, 20);
+  const done = q.show(text('answer'));
+  void q.show(BLANK, true);
+  void q.show(text('answer'));
+  await done;
+  release();
+  await gate;
+  assert.deepEqual(sent, [BLANK_TEXT, 'answer']);
+});
+
 test('an unchanged plan is not sent, unless forced', async () => {
   const p = new FakePort();
   const q = new RenderQueue(p);
@@ -63,6 +161,29 @@ test('a blank that fails falls back to a full rebuild', async () => {
   await q.show(text('a'));
   p.ok = false;
   await q.show(BLANK);
+  assert.deepEqual(p.rebuilt, [BLANK_TEXT]);
+});
+
+test('a failed text update rebuilds the page if the text is still wanted', async () => {
+  const p = new FakePort();
+  p.ok = false;
+  const q = new RenderQueue(p);
+  await q.show(text('answer'));
+  await q.show(text('answer'));
+  assert.deepEqual(p.sent, ['answer']);
+  assert.deepEqual(p.rebuilt, ['answer']);
+});
+
+test('a pending hide prevents rebuilding a failed text update', async () => {
+  const p = new FakePort();
+  let open!: () => void;
+  p.gate = new Promise((r) => { open = r; });
+  p.ok = false;
+  const q = new RenderQueue(p);
+  const done = q.show(text('answer'));
+  void q.show(BLANK);
+  open();
+  await done;
   assert.deepEqual(p.rebuilt, [BLANK_TEXT]);
 });
 

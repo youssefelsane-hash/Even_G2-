@@ -86,8 +86,8 @@ test('a disconnect hides, and a reconnect never reveals', () => {
   assert.equal(flatState(apply(s, WORN, SHAKE)), 'VISIBLE');
 });
 
-test('touch recovery works with unknown wear, and is refused when removed', () => {
-  assert.equal(flatState(apply(state({ mode: 'HIDDEN', wear: 'unknown' }), { type: 'TOUCH_RECOVERY' })), 'VISIBLE');
+test('touch recovery requires a positive wear report', () => {
+  assert.equal(flatState(apply(state({ mode: 'HIDDEN', wear: 'unknown' }), { type: 'TOUCH_RECOVERY' })), 'HIDDEN');
   assert.equal(flatState(apply(state({ mode: 'HIDDEN' }), { type: 'TOUCH_RECOVERY' })), 'VISIBLE');
   assert.equal(reduce(state({ mode: 'REMOVED', wear: 'removed' }), { type: 'TOUCH_RECOVERY' }).accepted, false);
 });
@@ -138,17 +138,17 @@ test('every state and event obeys the spec rules', () => {
     { type: 'AI_STARTED' }, { type: 'AI_RESULT' }, { type: 'AI_ERROR' },
   ];
   for (const mode of modes) for (const job of jobs) for (const wear of wears) for (const unseen of [false, true]) {
-    if (mode === 'VISIBLE' && wear === 'removed') continue; // cannot be reached: removal always leaves VISIBLE
+    if (mode === 'VISIBLE' && wear !== 'worn') continue;
     if (mode === 'HIDDEN' && wear === 'removed') continue;
     const s: MachineState = { mode, job, wear, unseen };
     for (const e of events) {
       const label = `${mode}/${job}/${wear}/${unseen} + ${e.type}`;
       const { state: n, accepted } = reduce(s, e);
       if (!accepted) assert.deepEqual(n, s, `${label}: an ignored event changes nothing`);
-      // The only ways to become visible: a shake while worn, or touch recovery while not removed.
+      // The wearer has to deliberately reveal the lens.
       if (mode !== 'VISIBLE' && n.mode === 'VISIBLE') {
         assert.equal(mode, 'HIDDEN', label);
-        assert.ok((e.type === 'SHAKE' && wear === 'worn') || (e.type === 'TOUCH_RECOVERY' && wear !== 'removed'), label);
+        assert.ok(wear === 'worn' && (e.type === 'SHAKE' || e.type === 'TOUCH_RECOVERY'), label);
       }
       if (mode === 'REMOVED' && e.type !== 'WEAR') assert.equal(n.mode, 'REMOVED', `${label}: only wearing them again leaves Removed`);
       if (e.type === 'WEAR' && e.wear === 'removed') assert.equal(n.mode, 'REMOVED', label);
@@ -156,7 +156,7 @@ test('every state and event obeys the spec rules', () => {
       if (e.type === 'CONNECTION' && e.connected) assert.equal(n.mode, mode, label);
       if (e.type === 'AI_RESULT' || e.type === 'AI_ERROR' || e.type === 'AI_STARTED') assert.equal(n.mode, mode, `${label}: the AI never changes what is revealed`);
       if (e.type === 'SCROLL') assert.equal(n.mode, mode, label);
-      if (wear !== 'worn' && (e.type === 'SHAKE' || (e.type === 'SCROLL' && e.source === 'tilt'))) assert.equal(accepted, false, `${label}: gestures need worn`);
+      if (wear !== 'worn' && (e.type === 'SHAKE' || e.type === 'SCROLL' || e.type === 'TOUCH_RECOVERY')) assert.equal(accepted, false, `${label}: gestures need worn`);
     }
   }
 });

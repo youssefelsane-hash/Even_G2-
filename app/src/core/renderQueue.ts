@@ -5,19 +5,28 @@ export const BLANK: DisplayPlan = { kind: 'blank' };
 // A text container cannot be empty, and a space lights no pixels.
 export const BLANK_TEXT = ' ';
 
-export interface DisplayPort {
-  /** Flicker-free text replacement. */
-  setText(text: string): Promise<boolean>;
-  /** Full redraw, used when the fast path fails to blank the lens. */
-  rebuild(text: string): Promise<boolean>;
+export interface DisplayTimings {
+  blankMs: number | null;
+  textMs: number | null;
 }
 
-// Sends plans to the glasses one at a time. Only the newest waiting plan is
-// kept, so a hide never queues behind a burst of scroll updates.
+export interface DisplayPort {
+  /** Flicker-free text replacement. */
+  setText(text: string, stillWanted: () => boolean): Promise<boolean>;
+  /** Full redraw when the in-place update fails. */
+  rebuild(text: string, stillWanted: () => boolean): Promise<boolean>;
+}
+
+// Sends one plan at a time. A blank must be accepted before new text can
+// overwrite it. Other waiting updates collapse into the latest plan.
 export class RenderQueue {
   private readonly port: DisplayPort;
   private readonly timeoutMs: number;
+  private readonly now: () => number;
   private wanted: DisplayPlan = BLANK;
+  private wantedAt: number | null = null;
+  private blankPendingAt: number | null = null;
+  private applied: DisplayTimings = { blankMs: null, textMs: null };
   // Unknown at start: after a WebView restart the old page can still be on the lens.
   private shown: string | null = null;
   private dirty = false;
@@ -26,12 +35,27 @@ export class RenderQueue {
   /** Called when the lens could not be blanked. */
   onBlankFailed: (() => void) | null = null;
 
-  constructor(port: DisplayPort, timeoutMs = 3000) {
+  constructor(port: DisplayPort, timeoutMs = 3000, now: () => number = () => performance.now()) {
     this.port = port;
     this.timeoutMs = timeoutMs;
+    this.now = now;
+  }
+
+  get timings(): Readonly<DisplayTimings> { return this.applied; }
+
+  get status(): string {
+    if (this.running) return 'updating';
+    if (this.shown === null) return 'unconfirmed';
+    return this.shown === BLANK_TEXT ? 'blank accepted' : 'text accepted';
   }
 
   show(plan: DisplayPlan, force = false): Promise<void> {
+    const same = plan.kind === 'blank' ? this.wanted.kind === 'blank'
+      : this.wanted.kind === 'text' && this.wanted.text === plan.text;
+    if (force || !same || this.wantedAt === null) {
+      this.wantedAt = this.now();
+      if (plan.kind === 'blank') this.blankPendingAt ??= this.wantedAt;
+    }
     this.wanted = plan;
     if (force) this.forced = true;
     this.dirty = true;
@@ -48,15 +72,18 @@ export class RenderQueue {
   }
 
   // One flaky hop can hang for a long time, so every call gets a time limit.
-  private call(send: () => Promise<boolean>): Promise<boolean> {
+  private call(send: (active: () => boolean) => Promise<boolean>): Promise<boolean> {
     return new Promise((resolve) => {
-      const timer = setTimeout(() => resolve(false), this.timeoutMs);
+      let active = true;
       const finish = (ok: boolean): void => {
+        if (!active) return;
+        active = false;
         clearTimeout(timer);
         resolve(ok);
       };
+      const timer = setTimeout(() => finish(false), this.timeoutMs);
       try {
-        send().then(finish, () => finish(false));
+        send(() => active).then(finish, () => finish(false));
       } catch {
         finish(false);
       }
@@ -66,17 +93,32 @@ export class RenderQueue {
   private async pump(): Promise<void> {
     while (this.dirty) {
       this.dirty = false;
-      const plan = this.wanted;
+      const blankAt = this.blankPendingAt;
+      const plan = blankAt === null ? this.wanted : BLANK;
+      const requestedAt = blankAt ?? this.wantedAt ?? this.now();
       const text = plan.kind === 'blank' ? BLANK_TEXT : plan.text;
-      const forced = this.forced;
+      const forced = blankAt !== null || this.forced;
+      this.blankPendingAt = null;
       this.forced = false;
       if (!forced && text === this.shown) continue;
-      let ok = await this.call(() => this.port.setText(text));
-      if (!ok && plan.kind === 'blank') {
-        ok = await this.call(() => this.port.rebuild(BLANK_TEXT));
-        if (!ok) this.onBlankFailed?.();
+      // The bridge may still be busy when wear changes. Check again before a
+      // queued text update or rebuild reaches the glasses.
+      const stillWanted = () => plan.kind === 'blank' ||
+        (this.blankPendingAt === null && this.wanted.kind === 'text' && this.wanted.text === text);
+      let ok = await this.call((active) => this.port.setText(text, () => active() && stillWanted()));
+      if (!ok && stillWanted()) {
+        ok = await this.call((active) => this.port.rebuild(text, () => active() && stillWanted()));
       }
       this.shown = ok ? text : null;
+      if (ok) this.applied[plan.kind === 'blank' ? 'blankMs' : 'textMs'] = Math.round(this.now() - requestedAt);
+      if (plan.kind === 'blank' && !ok) {
+        // Keep the requirement to blank, but wait for the next refresh to retry.
+        this.blankPendingAt = requestedAt;
+        this.dirty = false;
+        this.onBlankFailed?.();
+        return;
+      }
+      if (blankAt !== null && this.wanted.kind === 'text') this.dirty = true;
     }
   }
 }

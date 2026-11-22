@@ -46,6 +46,18 @@ details { margin: 10px 0; padding: 10px 12px; background: var(--color-surface); 
 details details { background: var(--color-input-bg); }
 summary { font-weight: 600; cursor: pointer; }
 .row { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0; }
+.calibration-step p { margin: 10px 0; }
+.calibration-title { font-weight: 600; }
+.calibration-timer {
+  min-height: 40px;
+  padding: 7px 12px;
+  border-radius: 6px;
+  background: var(--color-input-bg);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+button.calibration-primary { min-height: 44px; background: var(--color-accent); color: #232323; font-weight: 600; }
+button:disabled { cursor: default; opacity: 0.6; }
 button {
   min-height: 40px;
   padding: 6px 12px;
