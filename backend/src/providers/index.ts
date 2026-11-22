@@ -11,6 +11,10 @@ export async function createProvider(name: string, env: NodeJS.ProcessEnv = proc
       const { AnthropicProvider } = await import('./anthropic.ts');
       return new AnthropicProvider(env);
     }
+    case 'gemini': {
+      const { GeminiProvider } = await import('./gemini.ts');
+      return new GeminiProvider(env);
+    }
     default:
       throw new Error(`Unknown AI_PROVIDER "${name}"`);
   }

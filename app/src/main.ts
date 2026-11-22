@@ -102,6 +102,19 @@ async function main(): Promise<void> {
   }
   const backend = loadBackendSettings(localKv);
   if (backend) client.start(backend);
+  // Development only: with no server set, use the local backend behind the dev
+  // server's /v1 proxy, with the token the dev server hands out (vite.config.ts).
+  else if (import.meta.env.DEV) {
+    void fetch('./__dev/backend', { cache: 'no-store' }).then(async (res) => {
+      if (!res.ok) return;
+      const { clientToken } = await res.json() as { clientToken?: string };
+      const err = saveBackendSettings(localKv, { serverUrl: location.origin, token: clientToken ?? '' }, location.origin);
+      if (err) { console.error(`APP_ERROR dev backend: ${err}`); return; }
+      console.log('BACKEND dev server connected');
+      const saved = loadBackendSettings(localKv);
+      if (saved) client.start(saved);
+    }).catch(() => { /* no local backend set up */ });
+  }
   window.addEventListener('online', () => client.wake());
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') client.wake(); });
 
