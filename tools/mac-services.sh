@@ -18,6 +18,11 @@ AGENTS="$HOME/Library/LaunchAgents"
 LOGS="$HOME/Library/Logs/even-g2"
 DOMAIN="gui/$(id -u)"
 NAMES=(com.even-g2.backend com.even-g2.devserver)
+# Tailscale (Funnel gives the backend a public https address). Runs without root
+# in userspace mode, with its own state and socket; use tools/ts.sh for the CLI.
+TS_DIR="$HOME/Library/Application Support/even-g2/tailscale"
+TAILSCALED="$(command -v tailscaled || true)"
+[ -n "$TAILSCALED" ] && NAMES+=(com.even-g2.tailscale)
 
 plist() { # label workdir args...
   local label="$1" dir="$2"; shift 2
@@ -59,6 +64,11 @@ case "${1:-status}" in
       > "$AGENTS/com.even-g2.backend.plist"
     plist com.even-g2.devserver "$ROOT/app" "$NODE" "$ROOT/app/node_modules/vite/bin/vite.js" --host 0.0.0.0 --port 5174 --strictPort \
       > "$AGENTS/com.even-g2.devserver.plist"
+    if [ -n "$TAILSCALED" ]; then
+      mkdir -p "$TS_DIR"
+      plist com.even-g2.tailscale "$TS_DIR" "$TAILSCALED" --tun=userspace-networking --statedir="$TS_DIR" --socket="$TS_DIR/tailscaled.sock" \
+        > "$AGENTS/com.even-g2.tailscale.plist"
+    fi
     for n in "${NAMES[@]}"; do launchctl bootstrap "$DOMAIN" "$AGENTS/$n.plist"; done
     echo "Installed. Logs in $LOGS"
     ;;
