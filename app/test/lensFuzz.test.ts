@@ -1,6 +1,7 @@
 // Random event storms through the real Assistant and RenderQueue with a slow,
 // failing display. Unlike the Rig plan list, this checks what the lens itself got.
 import { test } from 'node:test';
+import { SENSOR_MODE } from './helpers.ts';
 import assert from 'node:assert/strict';
 import { Assistant } from '../src/core/assistant.ts';
 import { BLANK_TEXT, RenderQueue, type DisplayPort } from '../src/core/renderQueue.ts';
@@ -34,7 +35,7 @@ for (let seed = 1; seed <= 30; seed++) {
     let time = 1_000_000;
     const store = new MemoryStore();
     const a = await Assistant.create({
-      store, now: () => time,
+      store, now: () => time, initialSettings: SENSOR_MODE,
       onPlan: (p, force) => void q.show(p, force),
     });
     lens.a = a;
