@@ -33,3 +33,6 @@ __pycache__/
 
 # Camera device settings (hold the device token)
 camera.env
+
+# Packed glasses builds (tools/pack-glasses.sh)
+app/.pack/

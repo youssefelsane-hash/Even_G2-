@@ -128,6 +128,14 @@ async function main(): Promise<void> {
       if (saved) client.start(saved);
     }).catch(() => { /* no local backend set up */ });
   }
+  // A packed build (tools/pack-glasses.sh) carries the https server and its own
+  // token, so the installed app connects with nothing typed on the phone.
+  else if (import.meta.env.VITE_SERVER_URL && import.meta.env.VITE_SERVER_TOKEN) {
+    const err = saveBackendSettings(localKv, { serverUrl: import.meta.env.VITE_SERVER_URL, token: import.meta.env.VITE_SERVER_TOKEN });
+    if (err) console.error(`APP_ERROR built-in server: ${err}`);
+    const saved = loadBackendSettings(localKv);
+    if (saved) client.start(saved);
+  }
   window.addEventListener('online', () => client.wake());
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') client.wake(); });
 

@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="referrer" content="no-referrer" />
+  <title>Phone camera</title>
+  <style>
+    :root { color-scheme: light dark; --bg: #f4f4f2; --fg: #161616; --muted: #666; --card: #fff; --accent: #1f6feb; --bad: #c0362c; --ok: #1a7f37; }
+    @media (prefers-color-scheme: dark) { :root { --bg: #121212; --fg: #eee; --muted: #9a9a9a; --card: #1d1d1d; --accent: #4c8dff; --bad: #ff7b72; --ok: #56d364; } }
+    * { box-sizing: border-box; }
+    body { margin: 0 auto; padding: 16px; font: 16px/1.4 system-ui, sans-serif; background: var(--bg); color: var(--fg); max-width: 520px; }
+    h1 { font-size: 20px; margin: 4px 0 12px; }
+    .card { background: var(--card); border-radius: 14px; padding: 16px; margin-bottom: 12px; }
+    label.btn { display: block; width: 100%; padding: 18px; border-radius: 12px; font-size: 18px; font-weight: 600; text-align: center; cursor: pointer; }
+    .primary { background: var(--accent); color: #fff; }
+    .secondary { color: var(--accent); border: 2px solid var(--accent); margin-top: 10px; }
+    input[type=file] { display: none; }
+    .row { display: flex; gap: 10px; align-items: center; margin-top: 12px; }
+    .row input { width: 22px; height: 22px; }
+    #status { font-size: 17px; min-height: 1.4em; }
+    #status.bad { color: var(--bad); } #status.ok { color: var(--ok); }
+    .meta { color: var(--muted); font-size: 14px; }
+    #preview { display: flex; gap: 8px; margin-top: 10px; }
+    #preview img { width: 31%; aspect-ratio: 3/4; object-fit: cover; border-radius: 8px; }
+  </style>
+</head>
+<body>
+  <h1>Ask with the phone camera</h1>
+  <div class="card">
+    <label class="btn primary" for="shoot">Take a photo</label>
+    <input id="shoot" type="file" accept="image/*" capture="environment" />
+    <label class="btn secondary" for="pick">Choose up to 3 photos</label>
+    <input id="pick" type="file" accept="image/*" multiple />
+    <label class="row"><input id="append" type="checkbox" /> Add as the next page of my last question</label>
+  </div>
+  <div class="card">
+    <div id="status">Ready.</div>
+    <div id="preview"></div>
+    <p class="meta">The answer appears on the glasses, not here. Photos are deleted from the server when the answer is done.</p>
+  </div>
+<script>
+// Stands in for the body-worn camera. Sends photos exactly as the camera does
+// (POST /v1/captures: multipart meta + frame0..2, one Idempotency-Key per press,
+// device token) and shows the job status. It never receives the answer text.
+//
+// Pairing: open this page once as /phone#t=<device token>&d=<device id> (the
+// Mac shows it as a QR code). The token is kept in this phone's browser and
+// removed from the address bar at once. On the home dev server the page can
+// also fetch it from /__dev/backend.
+'use strict';
+const MAX_SIDE = 2048, MAX_BYTES = 2500000, MAX_FRAMES = 3, KEY = 'g2.phone.device';
+const $ = (id) => document.getElementById(id);
+const say = (text, kind = '') => { $('status').textContent = text; $('status').className = kind; };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const newKey = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
+
+function pairFromHash() {
+  const h = new URLSearchParams(location.hash.slice(1));
+  const t = h.get('t'), d = h.get('d');
+  history.replaceState(null, '', location.pathname);
+  if (t && d) { try { localStorage.setItem(KEY, JSON.stringify({ deviceToken: t, deviceId: d })); } catch {} }
+}
+
+async function getDevice() {
+  try { const s = JSON.parse(localStorage.getItem(KEY) || 'null'); if (s && s.deviceToken) return s; } catch {}
+  try {
+    const res = await fetch('/__dev/backend', { cache: 'no-store' });
+    if (res.ok) { const t = await res.json(); if (t.deviceToken) return { deviceToken: t.deviceToken, deviceId: t.deviceId }; }
+  } catch {}
+  return null;
+}
+
+async function toJpeg(file, index) {
+  const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
+  const scale = Math.min(1, MAX_SIDE / Math.max(bitmap.width, bitmap.height));
+  const width = Math.round(bitmap.width * scale), height = Math.round(bitmap.height * scale);
+  const canvas = Object.assign(document.createElement('canvas'), { width, height });
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(bitmap, 0, 0, width, height);
+  bitmap.close();
+  // Mean brightness from a coarse grid, so the server can say "too dark".
+  const data = ctx.getImageData(0, 0, width, height).data;
+  let sum = 0, n = 0;
+  const step = Math.max(1, Math.floor((width * height) / 20000)) * 4;
+  for (let i = 0; i < data.length; i += step) { sum += 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]; n++; }
+  for (const q of [0.88, 0.78, 0.65, 0.5]) {
+    const blob = await new Promise((r) => canvas.toBlob(r, 'image/jpeg', q));
+    if (blob && blob.size <= MAX_BYTES) return { name: 'phone' + index, score: 1, width, height, brightness: Math.round(sum / Math.max(n, 1)), blob };
+  }
+  throw new Error('photo too large even after compression');
+}
+
+async function send(files) {
+  if (!files.length) return;
+  const device = await getDevice();
+  if (!device) { say('This phone is not paired yet. Scan the pairing QR code shown on the computer.', 'bad'); return; }
+  const picked = files.slice(0, MAX_FRAMES);
+  say('Preparing ' + picked.length + ' photo' + (picked.length > 1 ? 's' : '') + '…');
+  $('preview').replaceChildren(...picked.map((f) => Object.assign(document.createElement('img'), { src: URL.createObjectURL(f), alt: '' })));
+  let frames;
+  try { frames = await Promise.all(picked.map(toJpeg)); } catch (e) { say('Could not read the photo: ' + e.message, 'bad'); return; }
+  const meta = { mode: frames.length === 1 ? 'single' : 'burst', capturedAt: new Date().toISOString(),
+    frames: frames.map(({ blob, ...f }) => f) };
+  if ($('append').checked) meta.appendTo = 'previous';
+  const headers = { Authorization: 'Bearer ' + device.deviceToken, 'X-Device-Id': device.deviceId, 'Idempotency-Key': newKey() };
+
+  let jobId = '';
+  for (let attempt = 1; attempt <= 5 && !jobId; attempt++) {
+    say(attempt === 1 ? 'Sending…' : 'Sending again (try ' + attempt + ')…');
+    const form = new FormData();
+    form.append('meta', new Blob([JSON.stringify(meta)], { type: 'application/json' }));
+    frames.forEach((f, i) => form.append('frame' + i, f.blob, 'frame' + i + '.jpg'));
+    try {
+      const res = await fetch('/v1/captures', { method: 'POST', body: form, headers });
+      const body = await res.json().catch(() => ({}));
+      if (res.ok && body.jobId) {
+        jobId = body.jobId;
+        if (body.glassesListening === false) say('Sent. The glasses app is not connected right now; the answer will wait for it.');
+        break;
+      }
+      if (res.status === 401 || res.status === 403) { try { localStorage.removeItem(KEY); } catch {} say('This phone is no longer paired. Scan the pairing QR code again.', 'bad'); return; }
+      if (res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429) { say('The server refused the photo (' + res.status + (body.error ? ': ' + body.error : '') + ').', 'bad'); return; }
+    } catch {}
+    await sleep(1000 * 2 ** (attempt - 1));
+  }
+  if (!jobId) { say('Could not reach the server. Check the internet connection.', 'bad'); return; }
+
+  const until = Date.now() + 120000;
+  let last = '';
+  while (Date.now() < until) {
+    await sleep(1500);
+    try {
+      const res = await fetch('/v1/captures/' + encodeURIComponent(jobId), { headers, cache: 'no-store' });
+      if (!res.ok) continue;
+      const s = await res.json();
+      if (s.status === last) continue;
+      last = s.status;
+      if (s.status === 'queued') say('Received. Waiting for the AI…');
+      else if (s.status === 'processing') say('The AI is reading it…');
+      else if (s.status === 'ready') { say('Done. The answer is on the glasses (tap 4 times on the right if they are locked).', 'ok'); return; }
+      else if (s.status === 'retake') { say('Take it again: ' + (s.retakeReason || 'not readable') + '.', 'bad'); return; }
+      else if (s.status === 'failed') { say('The AI failed on this one. Try again.', 'bad'); return; }
+    } catch {}
+  }
+  say('Still working. The answer will appear on the glasses when it is ready.');
+}
+
+pairFromHash();
+for (const id of ['shoot', 'pick']) {
+  const input = $(id);
+  input.addEventListener('change', () => { const files = Array.from(input.files || []); input.value = ''; void send(files); });
+}
+getDevice().then((d) => say(d ? 'Ready.' : 'This phone is not paired yet. Scan the pairing QR code shown on the computer.', d ? '' : 'bad'));
+</script>
+</body>
+</html>

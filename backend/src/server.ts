@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { readFileSync } from 'node:fs';
 import type { Config } from './config.ts';
 import { CaptureError, type JobStore } from './store.ts';
 import { bearer, type AuthRegistry } from './auth.ts';
@@ -8,6 +9,7 @@ import { FailureBlocker, RateLimiter } from './ratelimit.ts';
 import { parseCapture, RequestError } from './captureRequest.ts';
 import type { Log } from './worker.ts';
 
+const PHONE_PAGE = readFileSync(new URL('../public/phone.html', import.meta.url));
 const IDEM_RE = /^[A-Za-z0-9_-]{8,64}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const JSON_LIMIT = 8 * 1024;
@@ -164,6 +166,17 @@ export function buildServer(deps: ServerDeps): Server {
     if (req.method === 'OPTIONS') { res.writeHead(204).end(); return; }
 
     if (p === '/v1/healthz' && req.method === 'GET') return send(res, 200, { ok: true });
+
+    // The phone photo page (public/phone.html). It holds no secret: the phone
+    // keeps its own device token after pairing, and every upload is checked.
+    if (p === '/phone' && req.method === 'GET') {
+      res.writeHead(200, {
+        'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer',
+        'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'self'; img-src 'self' blob:; script-src 'unsafe-inline'; style-src 'unsafe-inline'",
+      });
+      res.end(PHONE_PAGE);
+      return;
+    }
 
     if (p === '/v1/captures') {
       if (req.method !== 'POST') throw new HttpError(405, 'method not allowed');
