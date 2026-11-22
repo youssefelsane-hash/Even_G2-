@@ -390,17 +390,34 @@ test('a fresh worn notification locks even when the host omitted the previous re
   }
 });
 
-test('an idle unlocked display sends no periodic status queries to the glasses', async () => {
+test('an unlocked display keeps reading wear when the host sends no change notification', async () => {
   const { r, b, link } = await setup({ initialSettings: undefined });
-  b.emit({ sysEvent: { eventType: 3, eventSource: 1 } });
-  b.emit({ sysEvent: { eventType: 3, eventSource: 1 } });
-  for (let check = 0; check < 6; check++) {
-    r.wait(2000);
+  const tap = () => b.emit({ sysEvent: { eventSource: 1 } });
+  for (let cycle = 0; cycle < 6; cycle++) {
+    tap(); tap();
+    assert.equal(r.a.state, 'HIDDEN');
+    tap();
+    assert.equal(r.a.state, 'VISIBLE');
+
+    // Reproduce the real host failure: the cached device info changes but no
+    // onDeviceStatusChanged callback reaches the plug-in.
+    b.info = status(true, false, false);
+    r.wait(250);
     link.tick();
     await flushTasks();
-    assert.equal(r.a.state, 'VISIBLE');
+    assert.equal(r.a.state, 'REMOVED');
+    assert.equal(r.lit(), false);
+
+    tap(); tap();
+    b.info = status(true, true, false);
+    r.wait(250);
+    link.tick();
+    await flushTasks();
+    assert.equal(r.a.state, 'HIDDEN');
+    assert.equal(r.a.snapshot().tapCount, 0);
+    assert.equal(r.lit(), false);
   }
-  assert.equal(b.infoReads, 1, 'only the initial status request reaches the bridge');
+  assert.equal(b.infoReads, 13, 'initial read plus off/on reads for every cycle');
   assert.deepEqual(b.imuCalls, []);
 });
 

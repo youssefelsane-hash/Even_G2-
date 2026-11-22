@@ -33,7 +33,7 @@ export interface HostLinkOptions {
 }
 
 const IMU_RETRY_MS = 10_000;
-const WEAR_CHECK_MS = 2000;
+const WEAR_CHECK_MS = 250;
 const WEAR_CHECK_TIMEOUT_MS = 400;
 
 export class HostLink {
@@ -228,10 +228,14 @@ export class HostLink {
     if (this.closed) return;
     this.wearCheck.tick(now());
     const s = assistant.snapshot();
-    // Leave an unlocked page idle on the device. During the sensor test, use
-    // pushes after the baseline so queries cannot influence the measurement.
+    // The native display can sleep without delivering a status push to the
+    // plug-in. Read while visible too: otherwise a missed removal leaves the
+    // previous unlock alive for the whole session. These app status snapshots
+    // are a fallback, not proof that the host supplies a live wear sensor.
+    // During the sensor test, use pushes after the baseline to measure that
+    // channel separately.
     const check = this.wearCheck.snapshot(now());
-    const canReadStatus = s.presence !== 'VISIBLE' && (!this.wearCheck.active || check.phase === 'baseline');
+    const canReadStatus = !this.wearCheck.active || check.phase === 'baseline';
     if (this.foreground && canReadStatus && (assistant.settings.trustWearSensor || this.wearCheck.active) &&
       !this.checkingWear && now() - this.lastStatusCheck >= WEAR_CHECK_MS) {
       this.checkingWear = true;

@@ -14,7 +14,7 @@ import { appNow } from './devClock.ts';
 const LOG_TAIL_KEY = 'g2a.log.tail';
 const BOOTS_KEY = 'g2a.boots';
 const LOG_TAIL_ROWS = 3000;
-const APP_REVISION = 'touch-lock-3';
+const APP_REVISION = 'wear-poll-4';
 
 // Wall clock on purpose (see devClock.ts): if the WebView is suspended, Date.now jumps forward and
 // the time gap shows up in the log. A monotonic page clock might simply pause.
@@ -138,8 +138,9 @@ async function main(): Promise<void> {
     retryPage();
     void assistant.tick();
     void queue.show(assistant.plan()); // an unchanged plan costs nothing; a failed blank is retried here
-    link?.tick();
   }, 1000));
+  // Wear recovery must not wait for the one-second UI/backend maintenance tick.
+  timers.push(setInterval(() => link?.tick(), 250));
   timers.push(setInterval(() => {
     if (assistant.logger.recording) localSet(LOG_TAIL_KEY, assistant.logger.toCsv(LOG_TAIL_ROWS));
   }, 5000));

@@ -46,7 +46,7 @@ npm run qr
 ```
 
 The QR command detects the Mac's local IP and checks that the server is reachable. Scan its code from
-`Even Realities → Even Hub → Scan QR`. The loaded page shows `Build touch-lock-3`.
+`Even Realities → Even Hub → Scan QR`. The loaded page shows `Build wear-poll-4`.
 
 The default is three taps within three seconds, using either temple. Earlier four-tap settings migrate to
 three-tap unlocking. Load a sample with `Simulator tools → Answer arrives`, then tap three times. One or two
@@ -247,8 +247,11 @@ with `?simulate=1` for simulator testing.
 
 The host can confirm worn again without delivering the preceding removal. Every pushed worn confirmation
 expires the previous unlock and clears partial taps. Returning to the foreground also locks before the
-device-status request completes. Two-second status snapshots run while locked. An unlocked page sends no
-periodic device queries. The sensor test listens to pushed reports after its initial worn baseline.
+device-status request completes. Device-status snapshots run every 250 ms while the app is in the foreground,
+including while text is visible. This recovers removals that update native status without a pushed event.
+Only one status request runs at a time. A host that keeps returning stale `isWearing: true` still cannot provide
+reliable automatic locking; polling does not turn a cached value into a sensor report. The sensor test listens
+to pushed reports after its initial worn baseline so that channel can be assessed separately.
 This conservative policy can also lock after a battery/status push carrying a worn value.
 
 `Check removal sensor → Test wear sensor` records six off-head and re-wear cycles from device reports.

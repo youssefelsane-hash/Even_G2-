@@ -136,7 +136,7 @@ Read these first. They affect how the tests are run.
 
 | Limit | Effect | Workaround today |
 | --- | --- | --- |
-| App starts HIDDEN and needs a restore before anything shows | You see a blank lens at first | With the glasses on, tap their touchpad 4 times within 3 seconds. Select a shake in Settings for shake tests |
+| App starts HIDDEN and needs a restore before anything shows | You see a blank lens at first | With the glasses on, tap their touchpad 3 times within 3 seconds. Select a shake in Settings for shake tests |
 | Logger must be started by hand, and **a reload stops it** | After a reload on lock, nothing more is recorded | Compare `Boots recorded`, and read `Log from earlier session` |
 | `Start` **clears the log** | Pressing Start again loses the previous run | Export before each new Start |
 | Log tail saved for reload analysis is the last 3000 rows, every 5 s, to browser storage | Covers about 5 minutes at 10 samples a second. Browser storage may not persist. SDK-APIS discrepancy 6 | Enough to see when logging ended |
@@ -213,7 +213,7 @@ Steps:
    logger, stay still 60 s, stop, export. Note `Wear:` too. Shake works only when it reads `worn`. If it reads
    `removed` or `unknown` with the glasses on, turn off "Trust the wear sensor" for now and flag it for HT-5.
 3. In a dark room, look at the lens. Note any lit pixels, border or glow.
-4. **Stage B, visible comparison.** Press `Answer arrives`, then tap the glasses touchpad 4 times to reveal. Log 60 s with
+4. **Stage B, visible comparison.** Press `Answer arrives`, then tap the glasses touchpad 3 times to reveal. Log 60 s with
    content showing, then compare the rate with stage A.
 5. **Stage C, calibrate.** Open Calibration and press `Start calibration`. Read each step, then press `I'm ready` when
    ready. Follow the prompt when `Recording` appears. Use `Try again` to repeat a step if needed. Open `Measurements`
