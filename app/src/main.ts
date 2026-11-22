@@ -14,7 +14,7 @@ import { appNow } from './devClock.ts';
 const LOG_TAIL_KEY = 'g2a.log.tail';
 const BOOTS_KEY = 'g2a.boots';
 const LOG_TAIL_ROWS = 3000;
-const APP_REVISION = 'four-taps-1';
+const APP_REVISION = 'reconnect-1';
 
 // Wall clock on purpose (see devClock.ts): if the WebView is suspended, Date.now jumps forward and
 // the time gap shows up in the log. A monotonic page clock might simply pause.
@@ -139,6 +139,18 @@ async function main(): Promise<void> {
     now,
     onClosed: () => { timers.forEach(clearInterval); void client.stop(); },
     onForeground: () => client.wake(),
+    // After a Bluetooth drop the glasses go back to their home screen. If this
+    // app is still alive, put its page back and redraw what the lens should show
+    // (blank while locked). Whether the host lets a plugin do this without being
+    // reopened is unknown: the log line says what happened.
+    onReconnect: () => {
+      if (!glasses) return;
+      void glasses.init().then((ok) => {
+        console.log(`PAGE restore after reconnect: ${ok}`);
+        if (ok) void queue.show(assistant.plan(), true);
+        client.wake();
+      });
+    },
   }) : null;
   await link?.start(pageReady);
 

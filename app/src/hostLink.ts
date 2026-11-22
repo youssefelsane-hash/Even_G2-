@@ -30,6 +30,8 @@ export interface HostLinkOptions {
   onClosed?(): void;
   /** The app came back to the foreground: for example, poll the backend now. */
   onForeground?(): void;
+  /** The glasses came back after a lost connection: the host may have dropped the page. */
+  onReconnect?(): void;
 }
 
 const IMU_RETRY_MS = 10_000;
@@ -52,6 +54,7 @@ export class HostLink {
   private foreground = true;
   private foregroundRevision = 0;
   private pageReady = false;
+  private wasConnected: boolean | null = null;
 
   constructor(options: HostLinkOptions) {
     this.o = options;
@@ -158,6 +161,8 @@ export class HostLink {
     if (line !== this.lastStatusLog) this.log(line);
     this.lastStatusLog = line;
     const connected = status.isConnected();
+    const reconnected = connected && this.wasConnected === false;
+    this.wasConnected = connected;
     this.wearCheck.observe({ connected, wearing: status.isWearing, inCase: status.isInCase }, this.o.now());
     assistant.handleConnection(connected);
     if (!connected) {
@@ -170,6 +175,10 @@ export class HostLink {
     assistant.handleWear(status.isInCase ? false : status.isWearing, status.isInCase === true,
       pushed && assistant.settings.trustWearSensor);
     this.syncMotion();
+    if (reconnected) {
+      this.log('DEVICE reconnected: restoring the glasses page');
+      this.o.onReconnect?.();
+    }
   }
 
   private leaveForeground(): void {
