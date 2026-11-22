@@ -64,3 +64,32 @@ test('HTTP and finish reasons map to retryable or final errors', async () => {
 test('a missing key fails at start-up, not on the first photo', () => {
   assert.throws(() => new GeminiProvider({}), /GEMINI_API_KEY/);
 });
+
+test('a busy or unavailable model hands the same request to the next one; a refusal does not', async () => {
+  const calls: string[] = [];
+  const replies: Record<string, [number, unknown]> = {
+    a: [503, { error: { message: 'overloaded' } }],
+    b: [400, { error: { message: 'This model models/b is no longer available' } }],
+    c: [200, ok(JSON.stringify(answer))],
+  };
+  const f = (async (url: string | URL | Request) => {
+    const m = String(url).match(/models\/([^:]+):/)![1];
+    calls.push(m);
+    const [status, body] = replies[m];
+    return new Response(JSON.stringify(body), { status });
+  }) as typeof fetch;
+  const p = new GeminiProvider({ GEMINI_API_KEY: 'k', GEMINI_MODEL: 'a, b ,c' }, f);
+  assert.equal(p.model, 'a');
+  assert.equal((await p.read(input, AbortSignal.timeout(1000))).short, 'x = 4');
+  assert.deepEqual(calls, ['a', 'b', 'c']);
+
+  calls.length = 0;
+  replies.a = [200, ok('{}', 'SAFETY')];
+  await assert.rejects(p.read(input, AbortSignal.timeout(1000)), /refused/);
+  assert.deepEqual(calls, ['a']);
+
+  calls.length = 0;
+  replies.a = [503, {}]; replies.b = [503, {}]; replies.c = [429, {}];
+  await assert.rejects(p.read(input, AbortSignal.timeout(1000)), (e: ProviderError) => e.retryable && /rate limited/.test(e.message));
+  assert.deepEqual(calls, ['a', 'b', 'c']);
+});

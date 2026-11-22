@@ -91,6 +91,7 @@ export class Assistant {
   private lastClock = -Infinity;
   private lastSampleT: number | null = null;
   private sensorStale = false;
+  private serverOffline = false;
   private shakes = 0;
   private lastGesture = 'none';
   private lastTap: TouchSource | null = null;
@@ -169,7 +170,7 @@ export class Assistant {
   }
 
   private header(): string {
-    const stale = this.sensorStale ? '  ! sensor lost' : '';
+    const stale = (this.sensorStale ? '  ! sensor lost' : '') + (this.serverOffline ? '  ! offline' : '');
     const job = this.machine.job;
     const docLabel = this.session.label ? `${this.session.label}${(this.session.pages ?? 1) > 1 ? ` ${this.session.pages}p` : ''}` : null;
     const label = job === 'ERROR' ? (this.errorKind === 'retake' ? 'RETAKE' : 'ERROR')
@@ -471,6 +472,13 @@ export class Assistant {
     this.persist();
     this.publish();
     return true;
+  }
+
+  /** The answer server has been unreachable for a while (or back): marked in the header while text shows. */
+  setServerOffline(offline: boolean): void {
+    if (offline === this.serverOffline) return;
+    this.serverOffline = offline;
+    this.publish();
   }
 
   /** Returning to the foreground requires a fresh unlock, even if removal was missed. */

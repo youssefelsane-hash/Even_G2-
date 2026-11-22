@@ -37,9 +37,15 @@ const RESPONSE_SCHEMA = (() => {
 
 type FetchLike = typeof fetch;
 
+// Seen working or busy on 2026-11-22: 3.5 answered in ~9-16 s; the "latest"
+// alias and 3.8 returned 503 (busy) at times. GEMINI_MODEL overrides, comma-separated.
+const DEFAULT_MODELS = 'gemini-3.5-flash,gemini-flash-latest,gemini-3.8-flash';
+
 export class GeminiProvider implements FusionProvider {
   readonly name = 'gemini';
   readonly model: string;
+  /** Tried in order: when one is busy (429, 5xx) or unavailable, the next one gets the same request. */
+  readonly models: string[];
   private readonly key: string;
   private readonly fetch: FetchLike;
 
@@ -47,14 +53,33 @@ export class GeminiProvider implements FusionProvider {
     const key = env.GEMINI_API_KEY ?? '';
     if (!key) throw new Error('GEMINI_API_KEY is not set');
     this.key = key;
-    this.model = env.GEMINI_MODEL ?? 'gemini-3.5-flash';
+    const models = (env.GEMINI_MODEL ?? DEFAULT_MODELS).split(',').map((m) => m.trim()).filter(Boolean);
+    this.models = models.length ? models : DEFAULT_MODELS.split(',');
+    this.model = this.models[0];
     this.fetch = fetchImpl;
   }
 
   async read(input: FusionInput, signal: AbortSignal): Promise<FusionOutput> {
+    let last: ProviderError | null = null;
+    for (const model of this.models) {
+      try {
+        return await this.readWith(model, input, signal);
+      } catch (err) {
+        if (!(err instanceof ProviderError)) throw err;
+        last = err;
+        // Only problems of this model move on: busy, down, gone. A refusal, bad
+        // credentials or the job's time limit would fail the same way on any model.
+        const modelSpecific = err.retryable || /bad request: .*model/i.test(err.message);
+        if (signal.aborted || !modelSpecific || err.message === 'AI call timed out') throw err;
+      }
+    }
+    throw last ?? new ProviderError('no model configured', false);
+  }
+
+  private async readWith(model: string, input: FusionInput, signal: AbortSignal): Promise<FusionOutput> {
     let res: Response;
     try {
-      res = await this.fetch(`${ENDPOINT}/${encodeURIComponent(this.model)}:generateContent`, {
+      res = await this.fetch(`${ENDPOINT}/${encodeURIComponent(model)}:generateContent`, {
         method: 'POST',
         signal,
         headers: { 'content-type': 'application/json', 'x-goog-api-key': this.key },

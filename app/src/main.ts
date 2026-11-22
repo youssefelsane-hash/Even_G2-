@@ -66,12 +66,25 @@ async function main(): Promise<void> {
   let lastState = '';
   let refreshPanel = (): void => {};
   let assistantRef: Assistant | null = null;
+  let offlineTimer: ReturnType<typeof setTimeout> | null = null;
   const client = new ResultClient({
     kv: localKv,
     fetch: (url, init) => fetch(url, init),
     // Results are held until the Assistant exists. It is created next, before polling starts.
     onEvent: (e) => assistantRef?.handleJobEvent(e),
-    onState: (s, detail) => { console.log(`BACKEND ${s}${detail ? ` ${detail}` : ''}`); refreshPanel(); },
+    onState: (s, detail) => {
+      console.log(`BACKEND ${s}${detail ? ` ${detail}` : ''}`);
+      // A single failed poll is normal (network change, server restart): mark
+      // the lens only after 10 s without the server, and clear it at once when back.
+      if (s === 'offline' || s === 'unauthorized') {
+        offlineTimer ??= setTimeout(() => { offlineTimer = null; assistantRef?.setServerOffline(true); }, 10_000);
+      } else if (s === 'online' || s === 'off') {
+        if (offlineTimer) clearTimeout(offlineTimer);
+        offlineTimer = null;
+        assistantRef?.setServerOffline(false);
+      }
+      refreshPanel();
+    },
   });
 
   const assistant = await Assistant.create({
