@@ -25,7 +25,7 @@ export function toRawSample(data: { x?: number; y?: number; z?: number } | null 
 }
 
 export type AdapterConfig = Pick<Settings,
-  'imuMode' | 'pitchAxis' | 'yawAxis' | 'pitchSign' | 'yawSign' | 'imuScale' |
+  'imuMode' | 'pitchAxis' | 'yawAxis' | 'pitchSign' | 'yawSign' | 'imuScale' | 'gravityAngles' |
   'rateBiasPitch' | 'rateBiasYaw' | 'wrapPeriod' | 'maxGapMs' | 'batchGapMs'>;
 
 export interface AdapterStats { accepted: number; rejected: number; gaps: number; batched: number; hz: number | null }
@@ -35,6 +35,19 @@ const MIN_RATE_SAMPLES = 8;
 // Faster than any head. In rate mode one such glitch would shift the integrated
 // angle for good; in orientation mode unwrapping already bounds a glitch.
 const MAX_RATE_DPS = 5000;
+
+const OTHER: Record<Axis, [Axis, Axis]> = { x: ['y', 'z'], y: ['x', 'z'], z: ['x', 'y'] };
+
+/**
+ * With accelerometer data (the real G2 sends gravity: |x,y,z| stays near 1),
+ * the angle of one axis above the horizontal, in degrees. It is exact at any
+ * angle and does not depend on the other tilt, unlike the raw value, which
+ * flattens out the further the head tilts.
+ */
+export function gravityAngle(raw: { x: number; y: number; z: number }, axis: Axis): number {
+  const [a, b] = OTHER[axis];
+  return (Math.atan2(raw[axis], Math.hypot(raw[a], raw[b])) * 180) / Math.PI;
+}
 
 /** A difference between two angles, folded into one wrap period. */
 export function wrapDelta(delta: number, period: number): number {
@@ -87,7 +100,7 @@ export class ImuAdapter {
   }
 
   private read(raw: RawSample, axis: Axis, sign: 1 | -1): number {
-    return raw[axis] * sign * this.cfg.imuScale;
+    return (this.cfg.gravityAngles ? gravityAngle(raw, axis) : raw[axis]) * sign * this.cfg.imuScale;
   }
 
   push(raw: RawSample): ImuSignal | null {

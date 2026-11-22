@@ -8,6 +8,7 @@ interface Job {
   send(): Promise<unknown>;
   resolve(value: unknown): void;
   reject(reason: unknown): void;
+  timeoutMs: number;
 }
 
 export class BridgeLane {
@@ -20,9 +21,10 @@ export class BridgeLane {
     this.timeoutMs = timeoutMs;
   }
 
-  run<T>(send: () => Promise<T>, urgent = false): Promise<T> {
+  run<T>(send: () => Promise<T>, urgent = false, timeoutMs = this.timeoutMs): Promise<T> {
     return new Promise<T>((resolve, reject) => {
-      (urgent ? this.urgent : this.normal).push({ send, resolve: resolve as (v: unknown) => void, reject });
+      const queue = urgent ? this.urgent : this.normal;
+      queue.push({ send, resolve: resolve as (v: unknown) => void, reject, timeoutMs: Math.min(timeoutMs, this.timeoutMs) });
       this.next();
     });
   }
@@ -41,7 +43,7 @@ export class BridgeLane {
       settle();
       this.next();
     };
-    const timer = setTimeout(() => finish(() => job.reject(new Error('bridge call timed out'))), this.timeoutMs);
+    const timer = setTimeout(() => finish(() => job.reject(new Error('bridge call timed out'))), job.timeoutMs);
     try {
       job.send().then((v) => finish(() => job.resolve(v)), (e) => finish(() => job.reject(e)));
     } catch (e) {

@@ -40,6 +40,6 @@ test('a call that throws at once rejects and does not stop the lane', async () =
 test('storage that hangs at boot falls back to the defaults instead of stalling the app', async () => {
   const hung = { getLocalStorage: () => new Promise<string>(() => {}), setLocalStorage: () => new Promise<boolean>(() => {}) };
   const store = new BridgeStore(hung, new BridgeLane(10));
-  assert.deepEqual(await loadSettings(store), sanitizeSettings({}));
+  assert.deepEqual(await loadSettings(store), sanitizeSettings({ tiltEnabled: false }));
   await assert.rejects(store.set('k', 'v'));
 });

@@ -60,6 +60,34 @@ Unless a test says otherwise:
 - Auto Display: off. HT-8 turns it on.
 - Even app battery: Unrestricted. HT-4 also runs without it.
 
+### Quick touch and wear test
+
+Use the QR preview with Wear Detection on, `Glasses touchpad` selected, and `Tilt to scroll` off. Load the
+sample with `Simulator tools → Answer arrives`. Wear the glasses throughout the head-motion checks.
+
+For a sensor report check, open `Check removal sensor` and press `Test wear sensor` while wearing the glasses.
+Follow the phone prompts for six rounds with the arms open. Record the build identifier, result and latest
+device report. A failed check means the expected report did not reach this preview within the step's time
+limit. Compare it with the same physical action in a native Even feature. The native sensor can work while
+the plug-in misses its reports.
+
+| Check | Expected result |
+| --- | --- |
+| Looking up, down, left and right at roughly 15°, 30° and 45°, and looking down to either side | The lens stays dark while `HIDDEN`. After unlocking, ordinary head movement leaves the line number alone. These angles are test poses |
+| Two taps on one temple followed by the third within three seconds | Only the third reveals the sample. `Lens timing (SDK reply)` records the time from the display request to SDK acceptance |
+| Select `Right side`, tap the left temple, then unlock from the right. Repeat with `Left side` | Taps from the selected temple count toward unlock. The phone shows the last tap's source. Record `side unavailable` if the host omits it |
+| Swipe down and then up while text is visible | The line number advances and then returns. Repeat near both ends of the answer |
+| Remove the glasses outside the case, then put them back on without touching them | `REMOVED` then `HIDDEN`. The lens stays dark until a fresh three-tap sequence. Check ten cycles, including rapid removal during scroll and re-wear in under a second |
+| Leave the preview and return | The lens is locked again. Open the same QR if the local preview was suspended |
+
+Note any visible flash and whether `Wear` changed. SDK acceptance is a software measurement. To measure the
+time to visible text or blank glass, record the lens and the gesture together. Repeat the locked-phone test
+from a Beta build, which exercises a different lifecycle from QR preview.
+
+For optional head gestures, repeat the directional looks with `Head shake` selected, then try a deliberate
+left-right shake. Test different angles after calibration and note the smallest repeatable movement. Use
+`Raw IMU logger → Start` to collect real motion samples in touch mode, then press `Stop`.
+
 ### Install
 
 Two install modes, and the difference matters:
@@ -108,7 +136,7 @@ Read these first. They affect how the tests are run.
 
 | Limit | Effect | Workaround today |
 | --- | --- | --- |
-| App starts HIDDEN and needs a restore before anything shows | You see a blank lens at first, which is correct | Reveal with 4 presses, or 4 taps on the panel's `Touch press` |
+| App starts HIDDEN and needs a restore before anything shows | You see a blank lens at first | With the glasses on, tap their touchpad 4 times within 3 seconds. Select a shake in Settings for shake tests |
 | Logger must be started by hand, and **a reload stops it** | After a reload on lock, nothing more is recorded | Compare `Boots recorded`, and read `Log from earlier session` |
 | `Start` **clears the log** | Pressing Start again loses the previous run | Export before each new Start |
 | Log tail saved for reload analysis is the last 3000 rows, every 5 s, to browser storage | Covers about 5 minutes at 10 samples a second. Browser storage may not persist. SDK-APIS discrepancy 6 | Enough to see when logging ended |
@@ -116,7 +144,7 @@ Read these first. They affect how the tests are run.
 | `imuControl` result and create result go only to the console | Not visible on the phone | Panel shows `IMU: no data` if nothing arrives. L2 fixes it |
 | No `Talking`, `Reading` or `Hidden` mark buttons | | Use the nearest mark and keep paper notes, or add L3 |
 | No contextual menu, no phone `Show` | HT-9 can only test the press pattern | Needs L5 |
-| Simulator tools are in the build | `Answer arrives` is useful on hardware. **Do not press `Worn`, `Removed` or `Disconnect` in a test**: they inject fake events | |
+| Preview has a sample answer | `Answer arrives` loads it. Wear and touch are reported by the glasses in a normal preview | |
 | The app restarts the IMU by itself | On foreground, after reconnect, and every 10 s while the sensor is lost. A stop that recovers shows as a gap, not as a stop. Each restart goes only to the console | Compare gaps in the log. L2 should show restarts on the panel |
 
 ### Instrumentation to add before HT-4
@@ -185,14 +213,16 @@ Steps:
    logger, stay still 60 s, stop, export. Note `Wear:` too. Shake works only when it reads `worn`. If it reads
    `removed` or `unknown` with the glasses on, turn off "Trust the wear sensor" for now and flag it for HT-5.
 3. In a dark room, look at the lens. Note any lit pixels, border or glow.
-4. **Stage B, visible comparison.** Press `Answer arrives`, then tap `Touch press` 4 times to reveal. Log 60 s with
+4. **Stage B, visible comparison.** Press `Answer arrives`, then tap the glasses touchpad 4 times to reveal. Log 60 s with
    content showing, then compare the rate with stage A.
-5. **Stage C, calibrate.** Open Calibration, press `Start`, follow the four steps, then `Accept`. Note the proposed
-   mode, axes and any error message. Save the proposal text.
-6. **Stage D, shake.** Scroll a few lines by tilt or swipe and write down the line range in the header. Shake to
+5. **Stage C, calibrate.** Open Calibration and press `Start calibration`. Read each step, then press `I'm ready` when
+   ready. Follow the prompt when `Recording` appears. Use `Try again` to repeat a step if needed. Open `Measurements`
+   to see the proposal, then press `Save gestures`. Record the proposed mode, axes and any error message.
+6. **Stage D, shake.** Select `Head shake` in Settings and save. Scroll a few lines by swipe and write down the line range in the header. Shake to
    hide. Shake to show. Do this 10 times each way.
 7. **Stage E, long blank.** Hide, then wait 30 minutes with the logger running. Do not touch anything. Then shake.
-8. On the blank page, press the touchpad 4 times to test touch events on blank.
+8. Select `Glasses touchpad` and save. Take the glasses off and put them back on. Confirm the lens is blank until
+   three fresh taps, then verify the previous line range is restored.
 
 Record: IMU rate on blank and visible, `gapsOver1s`, `dtMax`, lit pixels seen, wizard proposal, shakes detected out
 of 10 each way, whether the line range matched, whether the display or IMU slept during stage E, presses recognised.

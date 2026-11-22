@@ -25,6 +25,35 @@ npm run traces      # regenerate the SYNTHETIC sample traces in test/traces
 
 Requires Node 22.18 or later, which runs TypeScript directly.
 
+## Run on Even G2 from a Mac
+
+Connect the glasses in Even Realities and put the phone and Mac on the same Wi-Fi. Keep the phone unlocked
+and Even Realities open during the local preview.
+
+In the first Terminal, run these commands and leave the server running.
+
+```bash
+cd "$HOME/Documents/vs test/layout/Even_G2-/app"
+npm install
+npm run dev:glasses
+```
+
+In a second Terminal, generate the QR code.
+
+```bash
+cd "$HOME/Documents/vs test/layout/Even_G2-/app"
+npm run qr
+```
+
+The QR command detects the Mac's local IP and checks that the server is reachable. Scan its code from
+`Even Realities → Even Hub → Scan QR`. The loaded page shows `Build touch-lock-3`.
+
+The default is three taps within three seconds, using either temple. Earlier four-tap settings migrate to
+three-tap unlocking. Load a sample with `Simulator tools → Answer arrives`, then tap three times. One or two
+taps keep the lens blank. Remove the glasses with both arms open, put them on again, and wait five seconds.
+The lens should stay blank until three fresh taps. Repeat six cycles. `Check removal sensor` records which
+physical wear reports reach the preview. Observe the lens separately when checking visible blanking time.
+
 ## Layout
 
 | Path | Purpose |
@@ -182,14 +211,17 @@ hardware test (EXPERIMENT NEEDED).
 
 **5. Looking down to read.** To scroll, all of these must hold:
 1. The head starts from neutral. After any stop, it must return to the dead zone before tilt re-arms.
-2. It moves from the dead zone to the threshold within `tiltEntryMaxMs` (250 ms). A slow look down locks tilt.
+2. It moves from the dead zone to the threshold within `tiltEntryMaxMs` (250 ms by default). With no activity boost,
+   it has another 550 ms to reach and settle at the threshold. The slower path requires a steady hold.
 3. It stays between the threshold and `tiltMaxDeg` (38) for `tiltMinDurationMs` (350 ms). Further down locks tilt.
 4. There is no yaw motion that could be a shake or a glance.
 
-One tilt scrolls for at most `tiltMaxHoldMs` (6 s), so staying down cannot keep scrolling.
+One tilt scrolls for at most `tiltMaxHoldMs` (6 s), so staying down cannot keep scrolling. Speed follows depth:
+`scrollLinesPerSec` (2.5) just past the threshold, rising on an eased curve to `scrollMaxLinesPerSec` (7) near
+the upper limit.
 
-Remaining gap: a fast look down of 18 to 38 degrees that stays there does scroll, for up to 18 lines at the
-default speed. The position stays clamped and nothing is lost. Tilt can also be switched off in settings.
+An ordinary look down can also scroll if it reaches the same angle and timing as an intended tilt. The position
+stays clamped, and tilt can be switched off in settings.
 Real reading posture is unmeasured (EXPERIMENT NEEDED).
 
 **6. Scrolling.** The SDK has no call to read or set a firmware text scroll position (VERIFIED: `index.d.ts`;
@@ -204,10 +236,24 @@ the restored screen was pixel-identical. Text never overflows, so firmware scrol
 space: one update, atomic, and 0 lit pixels in the simulator (VERIFIED: `npm run sim:e2e`). Whether the IMU
 and touch keep flowing on a blank page on hardware is an EXPERIMENT NEEDED.
 
-**8. Recovery versus "only shake restores".** Shake stays the normal way. For a failed IMU there is a
-deliberate fallback: 4 presses within 3 seconds, a double press counting as 2. It works when wear is worn or
-unknown. It cannot fire while removed, during the settle time after re-wear, or with presses from before a
-removal. `LONG_PRESS_EVENT` exists in the SDK and may be a better choice after hardware tests.
+**8. Unlocking after re-wear.** Enable Wear Detection in Even Realities → My Devices. In G2 Assistant,
+Settings → Unlock with defaults to the glasses touchpad: three taps in three seconds, with a double tap
+counting as two. `Touchpad side` can require the left or right temple when the host reports the side. The
+phone shows the last tap's source and the number of touches counted while locked. The alternatives are a
+head shake or either gesture. Removal, a disconnect or the phone's `Lock display` button clears partial taps
+and any undo shortcut. Swiping on the touchpad scrolls after unlocking. Tilt scroll is available in Settings.
+In the preview, `Simulator tools → Answer arrives` loads a sample. Synthetic inputs are available in dev
+with `?simulate=1` for simulator testing.
+
+The host can confirm worn again without delivering the preceding removal. Every pushed worn confirmation
+expires the previous unlock and clears partial taps. Returning to the foreground also locks before the
+device-status request completes. Two-second status snapshots run while locked. An unlocked page sends no
+periodic device queries. The sensor test listens to pushed reports after its initial worn baseline.
+This conservative policy can also lock after a battery/status push carrying a worn value.
+
+`Check removal sensor → Test wear sensor` records six off-head and re-wear cycles from device reports.
+Keep the arms open. Folding/case reports, missing reports or leaving the preview interrupt the check.
+The result verifies bridge reports. Actual lens blanking still requires observation through the glasses.
 
 ## Wear data: a finding that changes the design
 
@@ -216,11 +262,22 @@ The spec expected `isWearing` could be undefined. In practice **SDK 0.0.16 turns
 exactly like "removed":
 - Partial status updates, such as battery only, might read as removal (EXPERIMENT NEEDED). Result: an
   unwanted hide, which is the safe direction.
-- If the host never reports wear, the app stays in REMOVED, and touch recovery is refused by design. The way
-  out is a deliberate setting on the phone, "Trust the wear sensor". Turning it off treats the glasses as
-  always worn and loses automatic hiding. The panel shows this hint whenever the state is removed.
+- If the host never reports wear, check Wear Detection in the Even app. The panel stays locked until the glasses
+  report that they are worn.
+- **Seen on a real G2 (2026-11-14): "removed" while on the head.** With "Use the glasses' wear sensor" off, the app
+  now tells removal from motion (`src/core/motionWear.ts`): perfectly still for `motionWearOffMs` (45 s), or
+  more than 65 degrees from the calibrated neutral and still for 10 s. Motion again counts as worn. The case
+  report and a lost connection still count. Motion-based detection can miss a quick removal.
 
-`undefined` is still handled, for direct calls: Visible goes to Hidden, shake is refused, touch recovery works.
+**Sleep and wake.** The app blanks the lens when the wear report changes to removed. While the preview is in
+the foreground and locked, the app checks the current status about every two seconds when no update has arrived.
+With the wear sensor trusted, the IMU runs only when an enabled motion feature needs it. With motion deciding,
+the IMU stays on to detect re-wear. The lens stays hidden on re-wear until the selected gesture.
+
+**Lens page retry.** If the startup page fails (seen on a real phone), the app retries every 3 s. The IMU
+cannot start before the page exists, so it starts as soon as a retry works.
+
+An unknown wear state hides visible content and requires a fresh wear report before unlocking.
 
 ## Exit and stored settings
 

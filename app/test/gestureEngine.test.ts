@@ -68,9 +68,57 @@ test('scroll speed comes from settings', () => {
   assert.ok(quick > slow * 1.6, `${quick} vs ${slow}`);
 });
 
+test('a deeper tilt scrolls faster, a small tilt reads slowly', () => {
+  const m = (deg: number) => sequence(still(1500), tilt(deg, { holdMs: 3000 }), still(1000));
+  const shallow = countGestures(stream(m(-21)), base).downLines;
+  const deep = countGestures(stream(m(-33)), base).downLines;
+  assert.ok(shallow >= 6 && shallow <= 10, `shallow ${shallow}`);
+  assert.ok(deep > shallow * 1.5, `${deep} vs ${shallow}`);
+  assert.ok(deep <= 3 * base.scrollMaxLinesPerSec + 2, `deep ${deep}`);
+});
+
+test('the speed setting for a deep tilt is never below the base speed', () => {
+  const s = sanitizeSettings({ ...base, scrollLinesPerSec: 9, scrollMaxLinesPerSec: 2 });
+  assert.equal(s.scrollMaxLinesPerSec, 9);
+});
+
+test('real glasses: a natural tilt at 10 Hz with sensor noise scrolls every time once noise is calibrated', () => {
+  // Values like the calibration on the user's G2 (2026-11-14): up 12.8, down 15.8, dead zone 5.9.
+  const tuned = sanitizeSettings({ ...base, tiltUpDeg: 12.8, tiltDownDeg: 15.8, deadZoneDeg: 5.9, tiltHysteresisDeg: 2.5, tiltMaxDeg: 40, sensorNoiseDeg: 0.8, smoothingMs: 120 });
+  const untuned = sanitizeSettings({ ...tuned, sensorNoiseDeg: 0 });
+  let tunedHits = 0, untunedHits = 0;
+  for (let seed = 1; seed <= 20; seed++) {
+    for (const [deg, rampMs] of [[-22, 600], [20, 500], [-24, 750]] as const) {
+      const m = sequence(still(1500), tilt(deg, { rampMs, holdMs: 1500 }), still(1000));
+      const opts = { hz: 10, noiseDeg: 0.8, seed };
+      if (countGestures(stream(m, opts), tuned).tiltStarts === 1) tunedHits++;
+      if (countGestures(stream(m, opts), untuned).tiltStarts === 1) untunedHits++;
+    }
+  }
+  assert.equal(tunedHits, 60, `tuned ${tunedHits}/60, untuned ${untunedHits}/60`);
+});
+
 test('a tilt shorter than the minimum duration does nothing', () => {
   const c = countGestures(stream(sequence(still(1500), tilt(-24, { rampMs: 100, holdMs: 150, backMs: 100 }), still(800))), base);
   assert.equal(c.tiltStarts, 0);
+});
+
+test('a gradual tilt up or down scrolls once it reaches and holds the calibrated angle', () => {
+  const settings = sanitizeSettings({ deadZoneDeg: 3.7, tiltUpDeg: 8, tiltDownDeg: 20.6, tiltMaxDeg: 54, tiltHysteresisDeg: 1.85 });
+  const rampMs = 950;
+  for (const hz of [10, 15, 50]) {
+    for (const [angle, direction] of [[12, 'up'], [-25, 'down']] as const) {
+      const motion = sequence(still(1500), tilt(angle, { rampMs, holdMs: 1200 }), still(800));
+      const result = countGestures(stream(motion, { hz, jitterMs: 12, seed: 2 }), settings, true);
+      const first = result.events.find((event) => event.type === 'scroll');
+      assert.ok(first, `${direction} at ${hz} Hz`);
+      assert.equal(first.direction, direction);
+      assert.ok(first.t >= 1500 + rampMs, 'waits until the tilt settles');
+      assert.ok(first.t <= 1500 + rampMs + 550, 'starts promptly during the hold');
+      assert.equal(result.tiltStarts, 1);
+      assert.equal(direction === 'up' ? result.downLines : result.upLines, 0);
+    }
+  }
 });
 
 test('risk 5: a slow look down never scrolls, however far inside the band', () => {
@@ -82,7 +130,7 @@ test('risk 5: a slow look down never scrolls, however far inside the band', () =
 
 test('risk 5: a fast look down that stays is bounded by the hold limit', () => {
   const c = countGestures(stream(sequence(still(1500), tilt(-26, { rampMs: 300, holdMs: 30_000, backMs: 500 }), still(800))), base, true);
-  const limit = (base.tiltMaxHoldMs / 1000) * base.scrollLinesPerSec + 2;
+  const limit = (base.tiltMaxHoldMs / 1000) * base.scrollMaxLinesPerSec + 2;
   assert.ok(c.downLines <= limit, `lines ${c.downLines}, limit ${limit}`);
   assert.equal(c.tiltStarts, 1, 'staying down must not restart scrolling');
   assert.ok(c.events.some((e) => e.type === 'tiltStop' && e.reason === 'hold-limit'));
@@ -212,4 +260,32 @@ test('short walking and talking runs stay quiet', () => {
     const t = countGestures(stream(talking(120_000, seed), { jitterMs: 8, dropRate: 0.02, seed }), base);
     assert.equal(w.shakes + w.tiltStarts + t.shakes + t.tiltStarts, 0);
   }
+});
+
+// Review findings, 2026-11-14: re-centering must not ratchet or fire a false opposite tilt.
+const pose = (durMs: number, from: number, to: number, rampMs = 300) =>
+  ({ durMs, pose: (t: number) => ({ pitch: from + (to - from) * Math.min(1, t / rampMs), yaw: 0 }) });
+
+test('re-centering: a look down in steps does not become neutral, and coming back does not scroll up', () => {
+  const m = sequence(still(1500), pose(1500, 0, -10), pose(1500, -10, -20), pose(3000, -20, -30), pose(2500, -30, 0, 400));
+  for (const hz of [10, 50]) {
+    const r = countGestures(stream(m, { hz, noiseDeg: 0.3 }), base, true);
+    assert.equal(r.upLines, 0, `${hz} Hz`);
+  }
+});
+
+test('re-centering: a pause on the way back from a scroll is not the new rest', () => {
+  const m = sequence(still(1500), pose(1500, 0, -24, 200), pose(1200, -24, -10), pose(2000, -10, 7));
+  for (const hz of [10, 50]) for (let seed = 1; seed <= 5; seed++) {
+    const r = countGestures(stream(m, { hz, noiseDeg: 0.5, seed }), base, true);
+    assert.equal(r.upLines, 0, `${hz} Hz seed ${seed}`);
+  }
+});
+
+test('re-centering: a resting pose just outside the dead zone stops locking tilt', () => {
+  // The head settles 8 degrees down and stays: a later deliberate tilt still works.
+  const m = sequence(still(1500), pose(4000, 0, -8, 600), pose(1500, -8, -8 - 24, 200), pose(1500, -32, -8, 300), still(0));
+  const r = countGestures(stream(m, { hz: 10, noiseDeg: 0.3 }), base, true);
+  assert.equal(r.tiltStarts, 1);
+  assert.ok(r.downLines >= 1);
 });

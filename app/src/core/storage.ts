@@ -1,4 +1,4 @@
-import { sanitizeSettings, type Settings } from './settings.ts';
+import { isUnlockGesture, sanitizeSettings, type Settings } from './settings.ts';
 
 export interface KeyValueStore {
   get(key: string): Promise<string | null>;
@@ -11,7 +11,8 @@ export class MemoryStore implements KeyValueStore {
   async set(key: string, value: string): Promise<boolean> { this.data.set(key, value); return true; }
 }
 
-export const SETTINGS_KEY = 'g2a.settings.v1';
+export const SETTINGS_KEY = 'g2a.settings.v2';
+export const LEGACY_SETTINGS_KEY = 'g2a.settings.v1';
 export const SESSION_KEY = 'g2a.session.v1';
 
 // What survives a restart. The Visible/Hidden mode is deliberately not here.
@@ -27,12 +28,19 @@ export interface Session {
 }
 
 export async function loadSettings(store: KeyValueStore): Promise<Settings> {
-  try {
-    const raw = await store.get(SETTINGS_KEY);
-    return sanitizeSettings(raw ? JSON.parse(raw) : {});
-  } catch {
-    return sanitizeSettings({});
+  for (const key of [SETTINGS_KEY, LEGACY_SETTINGS_KEY]) {
+    try {
+      const saved: unknown = JSON.parse(await store.get(key) ?? 'null');
+      if (!saved || typeof saved !== 'object' || Array.isArray(saved)) continue;
+      const settings = saved as Partial<Settings>;
+      if (key === SETTINGS_KEY && isUnlockGesture(settings.unlockGesture)) return sanitizeSettings(settings);
+      // Carry over calibration and the selected temple. Earlier controls move
+      // to three-tap unlocking with the hardware wear lock and manual scrolling.
+      return sanitizeSettings({ ...settings, unlockGesture: 'touch', recoveryPresses: 3,
+        trustWearSensor: true, tiltEnabled: false });
+    } catch { /* invalid or unavailable storage: try the earlier settings */ }
   }
+  return sanitizeSettings({ tiltEnabled: false });
 }
 
 export async function saveSettings(store: KeyValueStore, settings: Settings): Promise<boolean> {

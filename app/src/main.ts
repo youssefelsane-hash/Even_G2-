@@ -14,6 +14,7 @@ import { appNow } from './devClock.ts';
 const LOG_TAIL_KEY = 'g2a.log.tail';
 const BOOTS_KEY = 'g2a.boots';
 const LOG_TAIL_ROWS = 3000;
+const APP_REVISION = 'touch-lock-3';
 
 // Wall clock on purpose (see devClock.ts): if the WebView is suspended, Date.now jumps forward and
 // the time gap shows up in the log. A monotonic page clock might simply pause.
@@ -50,11 +51,13 @@ function recordBoot(): number[] {
 async function main(): Promise<void> {
   const boots = recordBoot();
   const previousLog = localGet(LOG_TAIL_KEY);
+  const params = new URLSearchParams(location.search);
+  const scriptedSimulation = import.meta.env.DEV && (params.has('autopilot') || !!params.get('e2e'));
   const bridge = await connectBridge(3000);
   const lane = new BridgeLane();
   const glasses = bridge ? new GlassesPort(bridge, lane) : null;
   // Before anything else: the page left by an earlier run may still show content.
-  const pageReady = glasses ? await glasses.init() : false;
+  let pageReady = glasses ? await glasses.init() : false;
   if (bridge) console.log(pageReady ? 'APP_READY blank page created' : 'APP_ERROR could not create the glasses page');
   else console.log('APP_READY without glasses bridge');
 
@@ -73,6 +76,7 @@ async function main(): Promise<void> {
 
   const assistant = await Assistant.create({
     store: bridge ? new BridgeStore(bridge, lane) : new MemoryStore(),
+    initialSettings: scriptedSimulation ? { unlockGesture: 'either', tiltEnabled: true, trustWearSensor: true } : undefined,
     now,
     measure: getTextWidth,
     onPlan: (plan: DisplayPlan, force) => void queue.show(plan, force),
@@ -92,7 +96,6 @@ async function main(): Promise<void> {
   client.setPresence(assistant.snapshot().presence);
   // Development only: the full-system test (tools/e2e-system) passes a local test
   // server and a token generated for that run. Never compiled into a build.
-  const params = new URLSearchParams(location.search);
   if (import.meta.env.DEV && params.has('e2e') && params.get('server') && params.get('token')) {
     const err = saveBackendSettings(localKv, { serverUrl: params.get('server') ?? '', token: params.get('token') ?? '' });
     if (err) console.error(`APP_ERROR e2e settings: ${err}`);
@@ -113,7 +116,26 @@ async function main(): Promise<void> {
   }) : null;
   await link?.start(pageReady);
 
+  // The first page call can fail on a real phone (slow Bluetooth, glasses still
+  // waking). Without a page the IMU cannot start, so keep trying.
+  let pageTry = 0;
+  let pageBusy = false;
+  const retryPage = (): void => {
+    if (pageReady || pageBusy || !glasses || !link || ++pageTry % 3 !== 0) return;
+    pageBusy = true;
+    void glasses.init().then((ok) => {
+      pageBusy = false;
+      if (!ok || link.isClosed) return; // the app ended while this try was running
+      pageReady = true;
+      console.log('APP_READY glasses page created on retry');
+      link.setPageReady();
+      void queue.show(assistant.plan(), true);
+      refreshPanel();
+    });
+  };
+
   timers.push(setInterval(() => {
+    retryPage();
     void assistant.tick();
     void queue.show(assistant.plan()); // an unchanged plan costs nothing; a failed blank is retried here
     link?.tick();
@@ -122,8 +144,25 @@ async function main(): Promise<void> {
     if (assistant.logger.recording) localSet(LOG_TAIL_KEY, assistant.logger.toCsv(LOG_TAIL_ROWS));
   }, 5000));
 
-  const host: PanelHost = { assistant, client, kv: localKv, previousLog, boots, hasBridge: bridge !== null, now, restartImu: link?.startImu ?? (async () => false) };
+  const host: PanelHost = {
+    assistant, client, kv: localKv, previousLog, boots,
+    revision: APP_REVISION,
+    hasBridge: bridge !== null, pageReady: () => pageReady, now,
+    simulateInput: import.meta.env.DEV && (scriptedSimulation || params.has('simulate')),
+    lensStatus: () => queue.status,
+    lensTimings: () => queue.timings,
+    syncMotion: link?.syncMotion ?? (() => {}),
+    restartImu: link?.startImu ?? (async () => false),
+    wearCheckStatus: () => link?.wearCheck.snapshot(now()) ?? null,
+    startWearCheck: link?.startWearCheck ?? (() => {}),
+    cancelWearCheck: link?.cancelWearCheck ?? (() => {}),
+  };
   refreshPanel = initPanel(host);
+  if (import.meta.env.DEV && !scriptedSimulation && !params.has('simulate')) {
+    const { startDevLog } = await import('./devLog.ts');
+    startDevLog(assistant, () => ({ revision: APP_REVISION, pageReady, lens: queue.status,
+      lensTimings: queue.timings, wearCheck: link?.wearCheck.snapshot(now()) ?? null }));
+  }
   lastState = assistant.state;
   console.log(`STATE ${lastState}`);
 

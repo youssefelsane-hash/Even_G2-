@@ -1,5 +1,6 @@
 import type { DisplayMode, JobEvent } from './backend.ts';
 import { CalibrationWizard } from './calibration.ts';
+import { MotionWear } from './motionWear.ts';
 import { GestureEngine, type EngineStatus, type GestureEvent } from './gestureEngine.ts';
 import { ImuAdapter, type AdapterStats, type RawSample } from './imuAdapter.ts';
 import { ImuLogger } from './imuLogger.ts';
@@ -14,9 +15,12 @@ import { ExampleRecorder, analyseExamples, type ExampleLabel, type PersonalResul
 
 export interface Answer { id: string; short: string; details: string }
 export type Touch = 'press' | 'double' | 'swipeUp' | 'swipeDown';
+export type TouchSource = 'left' | 'right' | 'ring' | 'unknown';
 
 export interface AssistantDeps {
   store: KeyValueStore;
+  /** Startup overrides for simulator runs using synthetic wear and motion. */
+  initialSettings?: Partial<Settings>;
   now(): number;
   /** Called on every display change. `force` resends even an unchanged plan. */
   onPlan(plan: DisplayPlan, force: boolean): void;
@@ -46,6 +50,8 @@ export interface Snapshot {
   engine: EngineStatus;
   shakes: number;
   lastGesture: string;
+  lastTap: TouchSource | null;
+  tapCount: number;
   /** Answers stored on the phone, and how many of them were never on the lens. */
   stored: number;
   unseenAnswers: number;
@@ -59,7 +65,7 @@ export interface Snapshot {
 const WELCOME: Session = {
   docId: 'welcome',
   short: 'Assistant ready.',
-  details: 'Take a photo with the camera button and the answer appears here. Tilt your head up or down to scroll. Shake your head to hide or show everything.',
+  details: 'Swipe on the glasses touchpad to scroll.',
   topLine: 0,
   unseen: false,
 };
@@ -86,9 +92,12 @@ export class Assistant {
   private sensorStale = false;
   private shakes = 0;
   private lastGesture = 'none';
+  private lastTap: TouchSource | null = null;
   private wizard: CalibrationWizard | null = null;
   readonly logger = new ImuLogger();
   readonly examples = new ExampleRecorder();
+  private motionWear: MotionWear | null = null;
+  private inCase = false;
   private readonly inbox: Inbox;
   private camera: CameraStatus | null = null;
   private errorKind: 'error' | 'retake' = 'error';
@@ -100,7 +109,7 @@ export class Assistant {
     this.deps = deps;
     this.inbox = new Inbox(deps.store, answers);
     this.settingsValue = settings;
-    this.session = session ?? WELCOME;
+    this.session = session?.docId === WELCOME.docId ? { ...session, details: WELCOME.details } : session ?? WELCOME;
     this.machine = bootState(this.session.unseen); // always Hidden, whatever was stored
     this.writer = new SessionWriter(deps.store);
     this.adapter = new ImuAdapter(settings);
@@ -112,11 +121,20 @@ export class Assistant {
 
   static async create(deps: AssistantDeps): Promise<Assistant> {
     const [settings, session, answers] = await Promise.all([loadSettings(deps.store), loadSession(deps.store), Inbox.load(deps.store)]);
-    return new Assistant(deps, settings, session, answers);
+    const initialSettings = deps.initialSettings ? sanitizeSettings(deps.initialSettings, settings) : settings;
+    return new Assistant(deps, initialSettings, session, answers);
   }
 
   get settings(): Readonly<Settings> { return this.settingsValue; }
   get state(): AppState { return flatState(this.machine); }
+  get motionNeeded(): boolean {
+    if (this.connected === false) return false;
+    if (this.wizard || this.examples.recording) return true;
+    if (this.inCase) return false;
+    if (!this.settingsValue.trustWearSensor) return true;
+    return this.machine.mode !== 'REMOVED' &&
+      (this.logger.recording || this.settingsValue.tiltEnabled || this.settingsValue.unlockGesture !== 'touch');
+  }
   /** Job id of the answer the lens shows or would show. No answer text. */
   get docId(): string { return this.session.docId; }
   get calibration(): CalibrationWizard | null { return this.wizard; }
@@ -175,7 +193,7 @@ export class Assistant {
 
   private presenceMode(): DisplayMode {
     const m = this.machine;
-    if (m.mode === 'VISIBLE') return 'VISIBLE';
+    if (contentAllowed(m)) return 'VISIBLE';
     if (m.mode === 'REMOVED') return 'REMOVED';
     return this.connected === true && m.wear !== 'unknown' ? 'HIDDEN' : 'UNKNOWN';
   }
@@ -216,17 +234,28 @@ export class Assistant {
   // ---- Sensor input ----
 
   handleImu(raw: RawSample): void {
+    if (!this.motionNeeded) return;
     this.logger.push(raw);
     const sample = Number.isFinite(raw.t) ? { ...raw, t: this.clock(raw.t) } : raw;
+    const signal = this.adapter.push(sample);
     if (this.wizard || this.examples.recording) {
-      this.wizard?.push(sample);
+      this.motionWear?.interrupt();
+      this.wizard?.push(raw);
       this.examples.push(sample);
-      if (Number.isFinite(sample.t)) this.sensorAlive(sample.t);
+      if (signal) this.sensorAlive(signal.t);
       return; // no gesture may fire while the user is told to tilt and shake
     }
-    const signal = this.adapter.push(sample);
     if (!signal) return;
     this.sensorAlive(sample.t);
+    if (!this.settingsValue.trustWearSensor) {
+      this.motionWear ??= new MotionWear(this.settingsValue);
+      const change = this.motionWear.push(signal);
+      if (change) {
+        this.logger.note(sample.t, `motion wear ${change}`);
+        this.applyWear(this.clock());
+        if (change === 'worn') return; // applyWear reset the engine and started the settle time
+      }
+    }
     if (this.machine.wear !== 'worn' || sample.t < this.settleUntil) return;
     for (const g of this.engine.push(signal)) this.onGesture(g);
   }
@@ -242,6 +271,7 @@ export class Assistant {
   private onGesture(g: GestureEvent): void {
     switch (g.type) {
       case 'shake': {
+        if (this.settingsValue.unlockGesture === 'touch') return;
         this.shakes++;
         this.lastGesture = `shake ${g.confidence.toFixed(2)}`;
         this.logger.note(g.t, `gesture shake confidence ${g.confidence.toFixed(2)}`);
@@ -249,9 +279,12 @@ export class Assistant {
         const shown = wasVisible ? this.visibleText() : '';
         this.undo = null;
         if (this.dispatch({ type: 'SHAKE' }, g.t)) {
+          this.presses.clear();
           // An accidental hide can be undone for a few seconds, but only back to
           // exactly the screen that was just hidden.
-          if (wasVisible && this.settingsValue.undoHideMs > 0) this.undo = { until: g.t + this.settingsValue.undoHideMs, text: shown };
+          if (wasVisible && this.settingsValue.unlockGesture === 'either' && this.settingsValue.undoHideMs > 0) {
+            this.undo = { until: g.t + this.settingsValue.undoHideMs, text: shown };
+          }
           this.persist();
           this.publish();
         }
@@ -281,30 +314,44 @@ export class Assistant {
     this.publish();
   }
 
-  /** `undefined` means the host gave no value. */
-  handleWear(isWearing: boolean | undefined): void {
+  /** `fresh` marks a pushed wear confirmation, which expires the previous unlock. */
+  handleWear(isWearing: boolean | undefined, inCase = false, fresh = false): void {
+    if (this.connected === false) return;
     const now = this.clock();
+    if (isWearing !== this.lastReportedWear || inCase !== this.inCase) this.logger.note(now, `wear ${String(isWearing)}`);
     this.lastReportedWear = isWearing;
-    this.logger.note(now, `wear ${String(isWearing)}`);
-    this.applyWear(now);
+    if (inCase !== this.inCase) this.motionWear?.reset(); // out of the case: start from worn
+    this.inCase = inCase;
+    this.applyWear(now, fresh);
   }
 
-  private applyWear(now: number): void {
+  private applyWear(now: number, fresh = false): void {
     const v = this.lastReportedWear;
-    // With the sensor distrusted the user has chosen to treat the glasses as always worn.
-    const wear: Wear = !this.settingsValue.trustWearSensor ? 'worn' : v === true ? 'worn' : v === false ? 'removed' : 'unknown';
-    if (!this.dispatch({ type: 'WEAR', wear }, now)) return;
+    // With the sensor distrusted, motion decides (worn until motion says otherwise),
+    // but only while connected, and the case report still counts: it is a separate signal.
+    let wear: Wear = 'unknown';
+    if (this.connected !== false) {
+      if (this.inCase) wear = 'removed';
+      else if (!this.settingsValue.trustWearSensor) wear = this.motionWear?.state ?? 'worn';
+      else if (v !== undefined) wear = v ? 'worn' : 'removed';
+    }
+    const changed = this.dispatch({ type: 'WEAR', wear }, now);
+    const newWearConfirmation = fresh && wear === 'worn';
+    if (!changed && !newWearConfirmation) return;
+    if (newWearConfirmation) this.dispatch({ type: 'EXIT' }, now);
     this.presses.clear();
+    this.lastTap = null;
     this.undo = null;
     for (const g of this.engine.reset()) this.onGesture(g);
     if (wear === 'worn') {
       // Putting glasses on looks like wild head motion, so wait before listening.
       this.settleUntil = now + this.settingsValue.wearSettleMs;
+      this.lastSampleT = now; // the IMU is being switched back on; give it time before calling it lost
       this.adapter.reset();
       this.engine.reacquireNeutral();
     }
     this.persist();
-    this.publish();
+    this.publish(!contentAllowed(this.machine));
   }
 
   handleConnection(connected: boolean): void {
@@ -314,6 +361,7 @@ export class Assistant {
     this.logger.note(now, `connection ${connected}`);
     this.dispatch({ type: 'CONNECTION', connected }, now);
     this.presses.clear();
+    this.lastTap = null;
     this.undo = null;
     if (!connected) {
       this.lastReportedWear = undefined;
@@ -325,21 +373,32 @@ export class Assistant {
     this.publish(connected); // the lens may have lost its page, so redraw on reconnect
   }
 
-  handleTouch(touch: Touch): void {
+  handleTouch(touch: Touch, source: TouchSource = 'unknown'): void {
     const now = this.clock();
-    if (this.machine.mode === 'REMOVED' || now < this.settleUntil) {
+    if (this.machine.wear !== 'worn' || this.machine.mode === 'REMOVED') {
       this.presses.clear();
       return;
     }
+    const tap = touch === 'press' || touch === 'double';
+    if (tap) this.lastTap = source;
     if (this.machine.mode === 'HIDDEN') {
-      if (touch !== 'press' && touch !== 'double') return;
+      const touchpad = this.settingsValue.unlockTouchpad;
+      if (this.settingsValue.unlockGesture === 'shake' || !tap || source === 'ring' ||
+        (touchpad !== 'either' && touchpad !== source)) {
+        this.presses.clear();
+        this.deps.onChange?.();
+        return;
+      }
       if (touch === 'double' && this.tryUndo(now)) return;
       if (this.presses.press(now, touch === 'double' ? 2 : 1) && this.dispatch({ type: 'TOUCH_RECOVERY' }, now)) {
-        this.logger.note(now, 'touch recovery');
+        this.lastGesture = 'touch unlock';
+        this.logger.note(now, 'touch unlock');
         // The engine kept running while hidden. A tilt in progress must not move the restored screen.
         for (const g of this.engine.reset()) this.onGesture(g);
         this.persist();
         this.publish();
+      } else {
+        this.deps.onChange?.();
       }
       return;
     }
@@ -384,20 +443,26 @@ export class Assistant {
     return true;
   }
 
-  /** The host brought the app back. Resend the plan: the lens may be out of date. */
+  /** Returning to the foreground requires a fresh unlock, even if removal was missed. */
   handleForeground(): void {
-    this.publish(true);
+    this.lockDisplay(true);
   }
 
-  /** The host closed or lost the app. If it comes back, nothing is revealed. */
-  handleExit(): void {
+  /** Clear the lens and require a fresh unlock gesture. */
+  lockDisplay(force = false): void {
     const now = this.clock();
     this.dispatch({ type: 'EXIT' }, now);
     this.presses.clear();
+    this.lastTap = null;
     this.undo = null;
     for (const g of this.engine.reset()) this.onGesture(g);
     this.persist();
-    this.publish();
+    this.publish(force);
+  }
+
+  /** Lock when the host closes or loses the app. */
+  handleExit(): void {
+    this.lockDisplay();
   }
 
   // ---- AI pipeline ----
@@ -502,7 +567,13 @@ export class Assistant {
   async tick(): Promise<void> {
     const now = this.clock();
     const s = this.settingsValue;
-    if (!this.sensorStale && this.lastSampleT !== null && now - this.lastSampleT > s.sensorStaleMs) {
+    if (!this.motionNeeded) {
+      this.lastSampleT = now;
+      if (this.sensorStale) {
+        this.sensorStale = false;
+        this.publish();
+      }
+    } else if (!this.sensorStale && this.lastSampleT !== null && now - this.lastSampleT > s.sensorStaleMs) {
       this.sensorStale = true;
       this.logger.note(now, 'sensor lost');
       for (const g of this.engine.reset('gap')) this.onGesture(g);
@@ -516,13 +587,26 @@ export class Assistant {
     await this.writer.flush(this.clock());
   }
 
-  async updateSettings(patch: Partial<Settings>): Promise<void> {
-    this.settingsValue = sanitizeSettings({ ...this.settingsValue, ...patch }, this.settingsValue);
+  private applySettings(patch: Partial<Settings>): void {
+    const previous = this.settingsValue;
+    const next = sanitizeSettings(patch, previous);
+    if (next.unlockGesture !== previous.unlockGesture || next.unlockTouchpad !== previous.unlockTouchpad ||
+      next.recoveryPresses !== previous.recoveryPresses ||
+      next.recoveryWindowMs !== previous.recoveryWindowMs || next.trustWearSensor !== previous.trustWearSensor) {
+      this.presses.clear();
+      this.undo = null;
+    }
+    this.settingsValue = next;
+    this.motionWear?.configure(this.settingsValue);
     this.adapter.configure(this.settingsValue);
     this.engine.configure(this.settingsValue);
     this.applyWear(this.clock()); // before the save: a hung store must not hold back a safety change
     this.deps.onChange?.();
-    await saveSettings(this.deps.store, this.settingsValue);
+  }
+
+  async updateSettings(patch: Partial<Settings>): Promise<boolean> {
+    this.applySettings(patch);
+    return saveSettings(this.deps.store, this.settingsValue);
   }
 
   startCalibration(): CalibrationWizard {
@@ -532,13 +616,24 @@ export class Assistant {
     return this.wizard;
   }
 
-  async finishCalibration(accept: boolean): Promise<void> {
-    const proposal = accept ? this.wizard?.accept() : null;
-    if (!accept) this.wizard?.cancel();
+  async finishCalibration(accept: boolean): Promise<boolean> {
+    if (accept) {
+      const wizard = this.wizard;
+      const current = this.settingsValue;
+      const proposal = wizard?.proposal(current);
+      if (!wizard || !proposal || !await saveSettings(this.deps.store, proposal) ||
+        this.wizard !== wizard || this.settingsValue !== current) return false;
+      wizard.accept();
+      this.wizard = null;
+      this.applySettings(proposal);
+      return true;
+    }
+    this.wizard?.cancel();
     this.wizard = null;
-    if (proposal) await this.updateSettings(proposal);
-    else this.engine.reacquireNeutral();
+    this.adapter.reset();
+    this.engine.reacquireNeutral();
     this.deps.onChange?.();
+    return false;
   }
 
   // ---- Personal calibration: the user's own examples ----
@@ -563,6 +658,7 @@ export class Assistant {
 
   snapshot(): Snapshot {
     const m = this.machine;
+    const now = this.clock();
     return {
       state: flatState(m),
       wear: m.wear,
@@ -572,14 +668,16 @@ export class Assistant {
       lineCount: this.pager.lineCount,
       sensorStale: this.sensorStale,
       adapter: this.adapter.stats(),
-      engine: this.engine.status(this.clock()),
+      engine: this.engine.status(now),
       shakes: this.shakes,
       lastGesture: this.lastGesture,
+      lastTap: this.lastTap,
+      tapCount: this.presses.count(now),
       stored: this.inbox.size,
       unseenAnswers: this.inbox.unseenCount(),
       camera: this.camera,
       presence: this.presenceMode(),
-      undoAvailable: this.undo !== null && this.clock() <= this.undo.until,
+      undoAvailable: this.undo !== null && now <= this.undo.until,
       recordingExample: this.examples.recording,
       examples: { shake: this.examples.count('shake'), tiltUp: this.examples.count('tiltUp'), tiltDown: this.examples.count('tiltDown'), other: this.examples.count('other') },
     };
