@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { BridgeLane, BridgeStore } from '../src/core/bridgeLane.ts';
-import { loadSettings } from '../src/core/storage.ts';
+import { loadSettings, WEAR_POLICY } from '../src/core/storage.ts';
 import { sanitizeSettings } from '../src/core/settings.ts';
 
 const later = (ms = 1) => new Promise<void>((r) => setTimeout(r, ms));
@@ -40,6 +40,6 @@ test('a call that throws at once rejects and does not stop the lane', async () =
 test('storage that hangs at boot falls back to the defaults instead of stalling the app', async () => {
   const hung = { getLocalStorage: () => new Promise<string>(() => {}), setLocalStorage: () => new Promise<boolean>(() => {}) };
   const store = new BridgeStore(hung, new BridgeLane(10));
-  assert.deepEqual(await loadSettings(store), sanitizeSettings({ tiltEnabled: false }));
+  assert.deepEqual(await loadSettings(store), sanitizeSettings({ ...WEAR_POLICY, tiltEnabled: false }));
   await assert.rejects(store.set('k', 'v'));
 });

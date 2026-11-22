@@ -43,7 +43,7 @@ test('recorded host message shapes lock through the installed SDK and display br
     store: new MemoryStore(), now: () => now,
     onPlan: (plan, force) => { void queue.show(plan, force); },
   });
-  await assistant.updateSettings({ unlockGesture: 'touch', unlockTouchpad: 'right', trustWearSensor: true });
+  await assistant.updateSettings({ unlockGesture: 'touch', unlockTouchpad: 'right', trustWearSensor: true, motionLock: false, recoveryPresses: 3, recoveryGapMs: 0, recoveryWindowMs: 3000, doublePressLocks: false });
   const link = new HostLink({ bridge, assistant, lane, now: () => now, log: () => {} });
   t.after(() => link.dispose());
   await link.start(true);

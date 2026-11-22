@@ -1,6 +1,7 @@
 import type { DisplayMode, JobEvent } from './backend.ts';
 import { CalibrationWizard } from './calibration.ts';
 import { MotionWear } from './motionWear.ts';
+import { RemovalLock, type RemovalReason } from './removalLock.ts';
 import { GestureEngine, type EngineStatus, type GestureEvent } from './gestureEngine.ts';
 import { ImuAdapter, type AdapterStats, type RawSample } from './imuAdapter.ts';
 import { ImuLogger } from './imuLogger.ts';
@@ -90,6 +91,7 @@ export class Assistant {
   private lastClock = -Infinity;
   private lastSampleT: number | null = null;
   private sensorStale = false;
+  private serverOffline = false;
   private shakes = 0;
   private lastGesture = 'none';
   private lastTap: TouchSource | null = null;
@@ -97,6 +99,7 @@ export class Assistant {
   readonly logger = new ImuLogger();
   readonly examples = new ExampleRecorder();
   private motionWear: MotionWear | null = null;
+  private readonly removal = new RemovalLock();
   private inCase = false;
   private readonly inbox: Inbox;
   private camera: CameraStatus | null = null;
@@ -116,7 +119,8 @@ export class Assistant {
     this.engine = new GestureEngine(settings);
     this.pager = new Pager(undefined, deps.measure ?? approxMeasure);
     this.pager.setText(this.docText(), this.session.topLine);
-    this.presses = new PressCounter(() => this.settingsValue.recoveryPresses, () => this.settingsValue.recoveryWindowMs);
+    this.presses = new PressCounter(() => this.settingsValue.recoveryPresses, () => this.settingsValue.recoveryWindowMs,
+      () => this.settingsValue.recoveryGapMs);
   }
 
   static async create(deps: AssistantDeps): Promise<Assistant> {
@@ -133,7 +137,8 @@ export class Assistant {
     if (this.inCase) return false;
     if (!this.settingsValue.trustWearSensor) return true;
     return this.machine.mode !== 'REMOVED' &&
-      (this.logger.recording || this.settingsValue.tiltEnabled || this.settingsValue.unlockGesture !== 'touch');
+      (this.logger.recording || this.settingsValue.tiltEnabled || this.settingsValue.unlockGesture !== 'touch' ||
+        (this.settingsValue.motionLock && this.machine.mode === 'VISIBLE'));
   }
   /** Job id of the answer the lens shows or would show. No answer text. */
   get docId(): string { return this.session.docId; }
@@ -165,7 +170,7 @@ export class Assistant {
   }
 
   private header(): string {
-    const stale = this.sensorStale ? '  ! sensor lost' : '';
+    const stale = (this.sensorStale ? '  ! sensor lost' : '') + (this.serverOffline ? '  ! offline' : '');
     const job = this.machine.job;
     const docLabel = this.session.label ? `${this.session.label}${(this.session.pages ?? 1) > 1 ? ` ${this.session.pages}p` : ''}` : null;
     const label = job === 'ERROR' ? (this.errorKind === 'retake' ? 'RETAKE' : 'ERROR')
@@ -245,6 +250,10 @@ export class Assistant {
       if (signal) this.sensorAlive(signal.t);
       return; // no gesture may fire while the user is told to tilt and shake
     }
+    if (this.settingsValue.motionLock && Number.isFinite(sample.t)) {
+      const removed = this.removal.push(sample);
+      if (removed) this.onMotionRemoval(removed, sample.t);
+    }
     if (!signal) return;
     this.sensorAlive(sample.t);
     if (!this.settingsValue.trustWearSensor) {
@@ -258,6 +267,21 @@ export class Assistant {
     }
     if (this.machine.wear !== 'worn' || sample.t < this.settleUntil) return;
     for (const g of this.engine.push(signal)) this.onGesture(g);
+  }
+
+  // The glasses just came off the head, judged from motion. Lock now: the
+  // firmware will show the plug-in's last frame again on re-wear.
+  private onMotionRemoval(reason: RemovalReason, t: number): void {
+    this.logger.note(t, `motion lock ${reason}`);
+    this.lastGesture = `motion lock ${reason}`;
+    if (this.machine.mode === 'VISIBLE') {
+      this.lockDisplay(true);
+      return;
+    }
+    this.presses.clear();
+    this.lastTap = null;
+    this.undo = null;
+    this.deps.onChange?.();
   }
 
   private sensorAlive(t: number): void {
@@ -363,6 +387,7 @@ export class Assistant {
     this.presses.clear();
     this.lastTap = null;
     this.undo = null;
+    this.removal.reset();
     if (!connected) {
       this.lastReportedWear = undefined;
       for (const g of this.engine.reset('gap')) this.onGesture(g);
@@ -416,6 +441,12 @@ export class Assistant {
         return;
       }
       case 'double':
+        if (this.settingsValue.doublePressLocks) {
+          this.lastGesture = 'double tap lock';
+          this.logger.note(now, 'double tap lock');
+          this.lockDisplay(true);
+          return;
+        }
         this.deps.onExitRequest?.();
         return;
       case 'swipeUp':
@@ -441,6 +472,13 @@ export class Assistant {
     this.persist();
     this.publish();
     return true;
+  }
+
+  /** The answer server has been unreachable for a while (or back): marked in the header while text shows. */
+  setServerOffline(offline: boolean): void {
+    if (offline === this.serverOffline) return;
+    this.serverOffline = offline;
+    this.publish();
   }
 
   /** Returning to the foreground requires a fresh unlock, even if removal was missed. */

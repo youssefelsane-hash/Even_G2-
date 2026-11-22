@@ -3,6 +3,11 @@ import { CAPTURE_COUNTDOWN_MS, CAPTURE_DURATION_MS, type CalibrationWizard } fro
 import type { RawSample } from '../src/core/imuAdapter.ts';
 import { BLANK_TEXT, type DisplayPlan } from '../src/core/renderQueue.ts';
 import { MemoryStore, type KeyValueStore } from '../src/core/storage.ts';
+import type { Settings } from '../src/core/settings.ts';
+
+/** The settings these tests were written for: the host wear report, three taps on either temple. */
+export const SENSOR_MODE: Partial<Settings> = { recoveryPresses: 3, recoveryWindowMs: 3000, recoveryGapMs: 0, unlockTouchpad: 'either',
+  trustWearSensor: true, motionLock: false, doublePressLocks: false };
 import { sequence, still, stream, type Motion, type StreamOptions } from '../src/core/synth.ts';
 
 export function recordCalibration(wizard: CalibrationWizard, motion: Motion, options: StreamOptions = {}, extraSamples: readonly RawSample[] = []) {
@@ -36,13 +41,16 @@ export class Rig {
   async start(): Promise<this> {
     const deps: AssistantDeps = {
       store: this.store,
-      initialSettings: { unlockGesture: 'either', tiltEnabled: true, recoveryPresses: 4 },
       now: () => this.time,
       onPlan: (p, force) => { this.plans.push(p); this.forced.push(force); },
       onExitRequest: () => this.exits++,
       onDisplayed: (id) => this.displayed.push(id),
       onPresence: (m) => this.presence.push(m),
       ...this.extra,
+      // The hardware wear sensor path; the motion lock has its own tests.
+      // `initialSettings: undefined` means the stored defaults, still in sensor mode.
+      initialSettings: { ...SENSOR_MODE, ...('initialSettings' in this.extra ? this.extra.initialSettings
+        : { unlockGesture: 'either', tiltEnabled: true, recoveryPresses: 4 }) },
     };
     this.a = await Assistant.create(deps);
     return this;

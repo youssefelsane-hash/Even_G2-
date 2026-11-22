@@ -14,7 +14,7 @@ import { appNow } from './devClock.ts';
 const LOG_TAIL_KEY = 'g2a.log.tail';
 const BOOTS_KEY = 'g2a.boots';
 const LOG_TAIL_ROWS = 3000;
-const APP_REVISION = 'wear-poll-4';
+const APP_REVISION = 'reconnect-1';
 
 // Wall clock on purpose (see devClock.ts): if the WebView is suspended, Date.now jumps forward and
 // the time gap shows up in the log. A monotonic page clock might simply pause.
@@ -66,12 +66,25 @@ async function main(): Promise<void> {
   let lastState = '';
   let refreshPanel = (): void => {};
   let assistantRef: Assistant | null = null;
+  let offlineTimer: ReturnType<typeof setTimeout> | null = null;
   const client = new ResultClient({
     kv: localKv,
     fetch: (url, init) => fetch(url, init),
     // Results are held until the Assistant exists. It is created next, before polling starts.
     onEvent: (e) => assistantRef?.handleJobEvent(e),
-    onState: (s, detail) => { console.log(`BACKEND ${s}${detail ? ` ${detail}` : ''}`); refreshPanel(); },
+    onState: (s, detail) => {
+      console.log(`BACKEND ${s}${detail ? ` ${detail}` : ''}`);
+      // A single failed poll is normal (network change, server restart): mark
+      // the lens only after 10 s without the server, and clear it at once when back.
+      if (s === 'offline' || s === 'unauthorized') {
+        offlineTimer ??= setTimeout(() => { offlineTimer = null; assistantRef?.setServerOffline(true); }, 10_000);
+      } else if (s === 'online' || s === 'off') {
+        if (offlineTimer) clearTimeout(offlineTimer);
+        offlineTimer = null;
+        assistantRef?.setServerOffline(false);
+      }
+      refreshPanel();
+    },
   });
 
   const assistant = await Assistant.create({
@@ -102,6 +115,27 @@ async function main(): Promise<void> {
   }
   const backend = loadBackendSettings(localKv);
   if (backend) client.start(backend);
+  // Development only: with no server set, use the local backend behind the dev
+  // server's /v1 proxy, with the token the dev server hands out (vite.config.ts).
+  else if (import.meta.env.DEV) {
+    void fetch('./__dev/backend', { cache: 'no-store' }).then(async (res) => {
+      if (!res.ok) return;
+      const { clientToken } = await res.json() as { clientToken?: string };
+      const err = saveBackendSettings(localKv, { serverUrl: location.origin, token: clientToken ?? '' }, location.origin);
+      if (err) { console.error(`APP_ERROR dev backend: ${err}`); return; }
+      console.log('BACKEND dev server connected');
+      const saved = loadBackendSettings(localKv);
+      if (saved) client.start(saved);
+    }).catch(() => { /* no local backend set up */ });
+  }
+  // A packed build (tools/pack-glasses.sh) carries the https server and its own
+  // token, so the installed app connects with nothing typed on the phone.
+  else if (import.meta.env.VITE_SERVER_URL && import.meta.env.VITE_SERVER_TOKEN) {
+    const err = saveBackendSettings(localKv, { serverUrl: import.meta.env.VITE_SERVER_URL, token: import.meta.env.VITE_SERVER_TOKEN });
+    if (err) console.error(`APP_ERROR built-in server: ${err}`);
+    const saved = loadBackendSettings(localKv);
+    if (saved) client.start(saved);
+  }
   window.addEventListener('online', () => client.wake());
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') client.wake(); });
 
@@ -113,6 +147,18 @@ async function main(): Promise<void> {
     now,
     onClosed: () => { timers.forEach(clearInterval); void client.stop(); },
     onForeground: () => client.wake(),
+    // After a Bluetooth drop the glasses go back to their home screen. If this
+    // app is still alive, put its page back and redraw what the lens should show
+    // (blank while locked). Whether the host lets a plugin do this without being
+    // reopened is unknown: the log line says what happened.
+    onReconnect: () => {
+      if (!glasses) return;
+      void glasses.init().then((ok) => {
+        console.log(`PAGE restore after reconnect: ${ok}`);
+        if (ok) void queue.show(assistant.plan(), true);
+        client.wake();
+      });
+    },
   }) : null;
   await link?.start(pageReady);
 

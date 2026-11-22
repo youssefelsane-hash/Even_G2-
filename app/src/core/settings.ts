@@ -80,6 +80,8 @@ export interface Settings {
   unlockGesture: UnlockGesture;
   unlockTouchpad: UnlockTouchpad;
   trustWearSensor: boolean;
+  /** Lock the lens from motion when the glasses come off the head (see removalLock.ts). Keeps the IMU on while text shows. */
+  motionLock: boolean;
   /** With the wear sensor distrusted, tell removal from motion: still this long means off the head. */
   motionWearOffMs: number;
   /** Largest pitch or yaw range that still counts as lying still, before the noise floor. */
@@ -87,6 +89,10 @@ export interface Settings {
   wearSettleMs: number;
   recoveryPresses: number;
   recoveryWindowMs: number;
+  /** A pause longer than this between unlock taps starts the count again. 0 = no limit. */
+  recoveryGapMs: number;
+  /** A double tap while text shows hides it, instead of asking to exit the app. */
+  doublePressLocks: boolean;
   sensorStaleMs: number;
 }
 
@@ -159,11 +165,14 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   unlockGesture: 'touch',
   unlockTouchpad: 'either',
   trustWearSensor: true,
+  motionLock: false,
   motionWearOffMs: 45_000,
   motionWearStillDeg: 1,
   wearSettleMs: 1500,
   recoveryPresses: 3,
   recoveryWindowMs: 3000,
+  recoveryGapMs: 0,
+  doublePressLocks: false,
   sensorStaleMs: 3000,
 });
 
@@ -224,6 +233,7 @@ const RANGES: Record<NumberKey, [number, number]> = {
   motionWearStillDeg: [0.1, 10],
   recoveryPresses: [3, 10],
   recoveryWindowMs: [500, 20_000],
+  recoveryGapMs: [0, 10_000],
   sensorStaleMs: [500, 60_000],
 };
 
@@ -258,6 +268,8 @@ export function sanitizeSettings(input: unknown, base: Readonly<Settings> = DEFA
   if (typeof src.tiltEnabled === 'boolean') out.tiltEnabled = src.tiltEnabled;
   if (typeof src.gravityAngles === 'boolean') out.gravityAngles = src.gravityAngles;
   if (typeof src.trustWearSensor === 'boolean') out.trustWearSensor = src.trustWearSensor;
+  if (typeof src.motionLock === 'boolean') out.motionLock = src.motionLock;
+  if (typeof src.doublePressLocks === 'boolean') out.doublePressLocks = src.doublePressLocks;
   if (typeof src.activityAware === 'boolean') out.activityAware = src.activityAware;
   if (src.neutralPitch === null) out.neutralPitch = null;
   else if (typeof src.neutralPitch === 'number' && Math.abs(src.neutralPitch) <= MAX_NEUTRAL) out.neutralPitch = src.neutralPitch;
@@ -285,5 +297,6 @@ export function sanitizeSettings(input: unknown, base: Readonly<Settings> = DEFA
   out.activityFullDeg = Math.max(out.activityFullDeg, out.activityQuietDeg + 0.5);
   // Keep touch recovery reachable by a person.
   out.recoveryWindowMs = Math.max(out.recoveryWindowMs, out.recoveryPresses * MIN_PRESS_MS);
+  if (out.recoveryGapMs > 0) out.recoveryGapMs = Math.max(out.recoveryGapMs, MIN_PRESS_MS);
   return out;
 }

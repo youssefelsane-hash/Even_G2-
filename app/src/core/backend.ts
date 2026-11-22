@@ -118,13 +118,17 @@ export function loadBackendSettings(kv: SyncKV): BackendSettings | null {
   return null;
 }
 
-/** Returns an error message, or null when saved. The token never goes anywhere but this store. */
-export function saveBackendSettings(kv: SyncKV, s: BackendSettings): string | null {
+/**
+ * Returns an error message, or null when saved. The token never goes anywhere but this store.
+ * `devOrigin`: development only, the page's own origin, which may be plain http (the dev server proxies /v1).
+ */
+export function saveBackendSettings(kv: SyncKV, s: BackendSettings, devOrigin?: string): string | null {
   const url = s.serverUrl.trim().replace(/\/+$/, '');
   let parsed: URL;
   try { parsed = new URL(url); } catch { return 'The server address is not a valid URL.'; }
   const local = parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1';
-  if (parsed.protocol !== 'https:' && !(local && parsed.protocol === 'http:')) return 'The server address must start with https://.';
+  const ownDevOrigin = devOrigin !== undefined && parsed.origin === devOrigin;
+  if (parsed.protocol !== 'https:' && !(local && parsed.protocol === 'http:') && !ownDevOrigin) return 'The server address must start with https://.';
   if (parsed.pathname !== '/' && parsed.pathname !== '') return 'Give only the server origin, for example https://example.com.';
   const token = s.token.trim();
   if (token.length < 16) return 'The token looks too short.';

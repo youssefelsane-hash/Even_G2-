@@ -610,3 +610,20 @@ test('without the lens page, nothing starts the IMU: not the tick, a foreground 
   await flushTasks();
   assert.deepEqual(b.imuCalls, []);
 });
+
+test('a reconnect after a lost connection asks to restore the glasses page, once', async () => {
+  let restores = 0;
+  const r2 = await new Rig().start();
+  const b2 = new FakeBridge();
+  const link2 = new HostLink({ bridge: b2, assistant: r2.a, lane: new BridgeLane(50), now: () => r2.time, log: () => {}, onReconnect: () => restores++ });
+  await link2.start(true);
+  b2.status(status(true, true));
+  assert.equal(restores, 0, 'staying connected is not a reconnect');
+  b2.status(status(false));
+  b2.status(status(false));
+  b2.status(status(true, true));
+  assert.equal(restores, 1);
+  b2.status(status(true, true));
+  assert.equal(restores, 1);
+  link2.dispose();
+});

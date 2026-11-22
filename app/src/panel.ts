@@ -298,6 +298,7 @@ export function initPanel(host: PanelHost): () => void {
     showTouchSettings();
     $<HTMLInputElement>('tiltEnabled').checked = s.tiltEnabled;
     $<HTMLInputElement>('trustWear').checked = s.trustWearSensor;
+    $<HTMLInputElement>('motionLock').checked = s.motionLock;
     $<HTMLInputElement>('activityAware').checked = s.activityAware;
     $<HTMLTextAreaElement>('advanced').value = JSON.stringify(s, null, 1);
   };
@@ -313,6 +314,7 @@ export function initPanel(host: PanelHost): () => void {
     if (!unlockTaps.disabled && Number.isInteger(taps)) patch.recoveryPresses = taps;
     patch.tiltEnabled = $<HTMLInputElement>('tiltEnabled').checked;
     patch.trustWearSensor = $<HTMLInputElement>('trustWear').checked;
+    patch.motionLock = $<HTMLInputElement>('motionLock').checked;
     patch.activityAware = $<HTMLInputElement>('activityAware').checked;
     const saving = assistant.updateSettings(patch as Partial<Settings>);
     host.syncMotion();
